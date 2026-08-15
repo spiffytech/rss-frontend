@@ -1,0 +1,13 @@
+# dependencies (bun install)
+node_modules
+
+# output
+public/style.css
+
+# dotenv environment variable files
+.env
+
+# sqlite
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
