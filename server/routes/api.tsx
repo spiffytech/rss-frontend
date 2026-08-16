@@ -89,6 +89,7 @@ export const apiRoutes = new Hono()
       generator.patchSignals(JSON.stringify({
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
+        entryIds: page.entries.map((e) => e.id),
       }))
     })
   })
@@ -106,6 +107,7 @@ export const apiRoutes = new Hono()
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
         loadingMore: false,
+        entryIds: [...(signals.entryIds ?? []), ...page.entries.map((e) => e.id)],
       }))
     })
   })
@@ -184,6 +186,7 @@ export const apiRoutes = new Hono()
       generator.patchSignals(JSON.stringify({
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
+        entryIds: page.entries.map((e) => e.id),
       }))
       await refreshFeedPanel(generator, body.viewMode ?? 'expanded', body.filter, body.hideReadItems ?? true)
     })
@@ -220,6 +223,7 @@ export const apiRoutes = new Hono()
       generator.patchSignals(JSON.stringify({
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
+        entryIds: page.entries.map((e) => e.id),
       }))
     })
   })

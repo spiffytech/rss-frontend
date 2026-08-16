@@ -3,6 +3,8 @@ node_modules
 
 # output
 public/style.css
+public/style-*.css
+public/.asset-manifest.json
 
 # dotenv environment variable files
 .env

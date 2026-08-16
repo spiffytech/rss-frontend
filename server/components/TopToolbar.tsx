@@ -133,7 +133,7 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
       type="button"
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
       title="Mark all read (Shift+A)"
-      data-on:click={`@put('/api/mark-all-read', { payload: { entryIds: window.dsEntryIds() } })`}
+      data-on:click={`@put('/api/mark-all-read')`}
     >
       ✓
     </button>
@@ -199,7 +199,7 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
       <button
         type="button"
         class="w-full text-left px-3 py-1.5 hover:bg-gray-100"
-        data-on:click={`@put('/api/mark-all-read', { payload: { entryIds: window.dsEntryIds() } }); $menuOpen = false`}
+        data-on:click={`@put('/api/mark-all-read'); $menuOpen = false`}
       >
         Mark all read
       </button>

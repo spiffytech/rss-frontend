@@ -53,6 +53,11 @@ const IndexView: FC<IndexViewProps> = ({
     userHasScrolled: false,
     collapsedCats: {} as Record<number, boolean>,
     keepUnreadIds: [] as number[],
+    // Ids of the entries currently rendered in the list. The server owns this
+    // signal (patched on every list replace/append), so "mark all read" and
+    // friends are plain `@put` calls — datastar sends the ids along with the
+    // rest of the view state. No DOM scraping.
+    entryIds: entries.map((e) => e.id),
     // Persisted preferences (localStorage), deliberately NOT in the URL.
     hideEmptyFeeds: true,
     hideReadItems: initialFilter.hideReadItems ?? true,
@@ -73,7 +78,7 @@ const IndexView: FC<IndexViewProps> = ({
     "if(evt.key === 'm'){ const id = window.dsCurrentId(); if(id){ @post('/api/entries/' + id + '/toggle-read'); } }",
     "if(evt.key === 's'){ const id = window.dsCurrentId(); if(id){ @post('/api/entries/' + id + '/star'); } }",
     "if(evt.key === 'v'){ const q = new URLSearchParams(location.search); q.set('view', $viewMode === 'expanded' ? 'list' : 'expanded'); location.href = location.pathname + '?' + q.toString(); }",
-    "if(evt.key === 'A' && evt.shiftKey){ @put('/api/mark-all-read', { payload: { entryIds: window.dsEntryIds() } }); }",
+    "if(evt.key === 'A' && evt.shiftKey){ @put('/api/mark-all-read'); }",
   ].join(' ')
   return (
     <Layout>
@@ -94,12 +99,16 @@ const IndexView: FC<IndexViewProps> = ({
           }}
         />
         <div class="relative grid grid-cols-1 md:grid-cols-[var(--sidebar-w)_1fr] gap-x-3 min-h-0 overflow-hidden">
-          {/* Sidebar: static column on md+ (via CSS `md:!block`), off-canvas
-              drawer on mobile toggled by `data-show="$sidebarOpen"`. Splitting
-              these keeps desktop visibility out of the signal layer, so a boot
-              `isMobile` patch can't race/swallow the first hamburger click. */}
+          {/* Sidebar: static column on md+ (forced by the `!important` rule in
+              main.css), off-canvas drawer on mobile toggled by `data-show`.
+              NOTE: no `max-md:hidden` class here — `data-show` shows an element
+              by removing its own inline `display:none`, and a `display:none`
+              class would still apply afterwards, so the drawer could never
+              open on mobile. The initial inline `display:none` hides it until
+              Datastar boots (no flash), then the signal takes over. */}
           <div
-            class="app-sidebar max-md:hidden fixed inset-y-0 left-0 z-30 w-[var(--sidebar-w)] bg-white shadow-xl md:shadow-none md:static md:bg-transparent md:block md:m-0 overflow-y-auto"
+            class="app-sidebar fixed inset-y-0 left-0 z-30 w-[var(--sidebar-w)] bg-white shadow-xl md:shadow-none md:static md:bg-transparent md:block md:m-0 overflow-y-auto"
+            style="display: none"
             {...{ 'data-show': `$sidebarOpen` }}
           >
             <div class="flex justify-end md:hidden p-2">
@@ -109,9 +118,12 @@ const IndexView: FC<IndexViewProps> = ({
             </div>
             <FeedPanel categories={categories} feeds={feeds} counters={counters} viewMode={initialViewMode} hideReadItems={initialFilter.hideReadItems ?? true} sort={initialFilter.sort} />
           </div>
-          {/* Scrim on mobile while the drawer is open */}
+          {/* Scrim on mobile while the drawer is open. Initial inline
+              `display:none` prevents a black flash before Datastar boots
+              (`md:hidden` only covers the desktop breakpoint). */}
           <div
             class="fixed inset-0 z-20 bg-black/30 md:hidden"
+            style="display: none"
             data-show="$sidebarOpen"
             data-on:click="$sidebarOpen = false"
           ></div>

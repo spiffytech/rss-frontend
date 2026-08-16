@@ -1,10 +1,12 @@
 import type { FC, PropsWithChildren } from 'hono/jsx'
+import { cssUrl } from '../lib/assets'
 
 interface LayoutProps {
   title?: string
 }
 
 const Layout: FC<PropsWithChildren<LayoutProps>> = ({ title = 'Miniflux Reader', children }) => {
+  const cssAsset = cssUrl()
   return (
     <html lang="en">
       <head>
@@ -12,7 +14,7 @@ const Layout: FC<PropsWithChildren<LayoutProps>> = ({ title = 'Miniflux Reader',
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title}</title>
         <link rel="icon" href="/favicon.svg" />
-        <link rel="stylesheet" href="/style.css" />
+        <link rel="stylesheet" href={cssAsset} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
         <link
@@ -67,7 +69,6 @@ window.dsNav = (dir) => {
   wrapper.scrollTop = wrapper.scrollTop + (targetRect.top - wrapperRect.top);
   return targetId;
 };
-window.dsEntryIds = () => Array.from(document.querySelectorAll('[data-entry-id]')).map((el) => Number(el.getAttribute('data-entry-id')));
 document.addEventListener('error', (e) => {
   const target = e.target;
   if (target instanceof HTMLImageElement && target.closest('aside[data-testid="feed-panel"]')) {

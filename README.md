@@ -37,7 +37,9 @@ Why `MINIFLUX_API_TOKEN` still exists: it's the bootstrap/admin credential — u
 |---|---|
 | `bun run dev` | Start the server with watch mode (`PORT` env or 3007) |
 | `bun run typecheck` | `tsc --noEmit` |
-| `bun run build:css` | Tailwind v4 → `public/style.css` |
+| `bun run build:css` | Tailwind v4 → `public/style.css` (stable name) |
+| `bun run fingerprint:css` | Compile+hash CSS → `public/style-<sha256-16>.css` + `.asset-manifest.json` |
+| `bun run build` | `fingerprint:css` (the production build step) |
 
 ## Features
 
@@ -53,7 +55,7 @@ Why `MINIFLUX_API_TOKEN` still exists: it's the bootstrap/admin credential — u
 
 - `server/hono.tsx` — Hono app entry; auth middleware, login/logout routes, static + route mounting.
 - `server/routes/*.tsx` — `index` renders `GET /`; `api` handles datastar SSE endpoints (per-row patches).
-- `server/lib/*` — `miniflux.ts` (typed REST client, request-scoped credentials via `AsyncLocalStorage`), `auth.ts` (HMAC session cookie), `config.ts`, `util.ts`, `types.ts`.
+- `server/lib/*` — `miniflux.ts` (typed REST client, request-scoped credentials via `AsyncLocalStorage`), `auth.ts` (HMAC session cookie), `config.ts`, `assets.ts` (content-hashed CSS URL from build manifest), `util.ts`, `types.ts`.
 - `server/components/*` — JSX components (Layout, TopToolbar, FeedPanel, EntryList, EntryItem).
 
 ## Notes
@@ -61,3 +63,4 @@ Why `MINIFLUX_API_TOKEN` still exists: it's the bootstrap/admin credential — u
 - Signals are the datastar default: `@post`/`@put` send all signals as a JSON body; `@get` sends them as the `datastar` query param. Route handlers parse accordingly.
 - Entry rows are patched individually (`selector: '#entry-<id>'`, `mode: 'outer'`); only filter/view changes re-render the whole list.
 - The datastar JS is loaded from the CDN (`datastar@v1.0.2`). Replace with a vendored copy for production.
+- Static CSS is content-hashed at build time (`scripts/fingerprint-css.ts` → `public/style-<hash>.css` → `public/.asset-manifest.json`). The server renders `<link href>` from that manifest and serves the hashed file `immutable`, so a redeploy invalidates styles naturally; the stable `/style.css` alias is kept for legacy caches/offline references.

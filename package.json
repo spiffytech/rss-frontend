@@ -7,7 +7,9 @@
     "dev": "PORT=3007 bun run --watch server/hono.tsx",
     "typecheck": "bunx --bun tsc --noEmit",
     "build:css": "bunx @tailwindcss/cli -i ./main.css -o ./public/style.css --source ./server",
-    "build:css:watch": "bun run build:css -- --watch"
+    "build:css:watch": "bun run build:css -- --watch",
+    "fingerprint:css": "bun run scripts/fingerprint-css.ts",
+    "build": "bun run fingerprint:css"
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.0",

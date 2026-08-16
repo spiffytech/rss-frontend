@@ -7,47 +7,41 @@ import { apiRoutes } from './routes/api'
 import { readSession, writeSession, clearSession } from './lib/auth'
 import { minifluxContext, MinifluxError, authenticateWithPassword, createApiKey, deleteApiKey } from './lib/miniflux'
 import { loadConfig } from './lib/config'
+import { cssUrl } from './lib/assets'
 
 const app = new Hono()
 app.use(logger())
 
 // The HTML shell is fully server-rendered and changes with every deploy —
 // never let the browser serve a stale copy (a cached old build is a real
-// source of "bugs that are already fixed"). Static assets are content-address
-// stable enough for a short cache + revalidation.
+// source of "bugs that are already fixed"). In production the CSS is
+// content-hashed and served immutable; in development it's served no-cache.
 app.use('/api/*', async (ctx, next) => {
   await next()
   ctx.header('Cache-Control', 'no-store')
 })
-app.use('/style.css', async (ctx, next) => {
-  await next()
-  ctx.header('Cache-Control', 'public, max-age=3600, stale-while-revalidate=86400')
-})
+// Content-fingerprinted CSS (production only): the URL embeds the content
+// hash, so a 1-year immutable cache is safe — a change of bytes changes the
+// URL. In development the HTML references the stable /style.css, which the
+// catch-all below serves no-cache so CSS edits are always fresh.
+const cssAsset = cssUrl()
+if (process.env.NODE_ENV === 'production') {
+  app.use(cssAsset, async (ctx, next) => {
+    await next()
+    ctx.header('Cache-Control', 'public, max-age=31536000, immutable')
+  })
+}
 app.use('/*', async (ctx, next) => {
   await next()
   if (!ctx.res.headers.get('Cache-Control')) {
     ctx.header('Cache-Control', 'no-cache')
   }
 })
-
-// ---------------- Auth ----------------
-
-/** Login body from either a JS fetch (JSON) or a plain form POST (urlencoded). */
-async function readBody(ctx: { req: { header: (n: string) => string | undefined; json: () => Promise<unknown>; parseBody: () => Promise<Record<string, unknown>> } }): Promise<Record<string, string>> {
-  const raw = await (() => {
-    const ct = ctx.req.header('content-type') ?? ''
-    return ct.includes('application/json') ? ctx.req.json() : ctx.req.parseBody()
-  })()
-  const body = (raw || {}) as Record<string, unknown>
-  return {
-    username: typeof body.username === 'string' ? body.username : '',
-    password: typeof body.password === 'string' ? body.password : '',
-  }
-}
-
-/** Public paths that never require a session. */
 const PUBLIC_PATHS = new Set([
   '/login',
+  cssAsset,
+  // Legacy alias: keep serving the stable name (no-cache) so old references
+  // and ad-hoc links resolve even after switching to hashed URLs.
   '/style.css',
   '/favicon.svg',
 ])
@@ -78,6 +72,19 @@ app.use('/*', async (ctx, next) => {
   return minifluxContext.run({ token: session.token }, () => next())
 })
 
+/** Login body from either a JS fetch (JSON) or a plain form POST (urlencoded). */
+async function readBody(ctx: { req: { header: (n: string) => string | undefined; json: () => Promise<unknown>; parseBody: () => Promise<Record<string, unknown>> } }): Promise<Record<string, string>> {
+  const raw = await (() => {
+    const ct = ctx.req.header('content-type') ?? ''
+    return ct.includes('application/json') ? ctx.req.json() : ctx.req.parseBody()
+  })()
+  const body = (raw || {}) as Record<string, unknown>
+  return {
+    username: typeof body.username === 'string' ? body.username : '',
+    password: typeof body.password === 'string' ? body.password : '',
+  }
+}
+
 /** Minimal login page (no styling dep — reuses app CSS). */
 app.get('/login', (ctx) =>
   ctx.html(`<!doctype html>
@@ -87,7 +94,7 @@ app.get('/login', (ctx) =>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Sign in — Miniflux Reader</title>
     <link rel="icon" href="/favicon.svg" />
-    <link rel="stylesheet" href="/style.css" />
+    <link rel="stylesheet" href="${cssAsset}" />
     <style>
       /* One authored entrance: the card rises and fades from an already-visible
          default. Reduced-motion users get the static composited state. */
