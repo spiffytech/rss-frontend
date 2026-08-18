@@ -114,7 +114,7 @@ const IndexView: FC<IndexViewProps> = ({
           <div
             class="hidden"
             data-on-signal-patch-filter="{include: /^navRequest$/}"
-            data-on-signal-patch="$navRequest != null && (document.getElementById('entry-' + $navRequest)?.scrollIntoView({block:'start', behavior:'smooth'}), $navRequest = null)"
+            data-on-signal-patch="$navRequest != null && (scrollNav($navRequest), $navRequest = null)"
           ></div>
           {/* Sidebar: static column on md+ (forced by the `!important` rule in
               main.css), off-canvas drawer on mobile toggled by `data-show`.
@@ -154,6 +154,38 @@ const IndexView: FC<IndexViewProps> = ({
           <div class="overflow-y-auto min-h-0" {...{ 'data-on:scroll': '$userHasScrolled = true' }}>
             <EntryList entries={entries} viewMode={initialViewMode} />
           </div>
+          <script
+            dangerouslySetInnerHTML={{
+              __html: `// Nav scroll: linear interpolation over a fixed budget. Drives real
+// scrollTop (not a transform), so track-top / auto-read / sentinel observers
+// all see genuine scrolling. Honors prefers-reduced-motion with an instant
+// jump.
+(() => {
+  const SCROLL_MS = 150;
+  globalThis.scrollNav = (entryId) => {
+    const el = document.getElementById('entry-' + entryId);
+    if (!el) return;
+    const scroller = el.closest('[data-testid="entry-list"]')?.parentElement
+      ?? el.offsetParent;
+    if (!scroller) return;
+    const to = scroller.scrollTop + (el.getBoundingClientRect().top - scroller.getBoundingClientRect().top);
+    const from = scroller.scrollTop;
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      scroller.scrollTop = to;
+      return;
+    }
+    let start;
+    const step = (ts) => {
+      if (start === undefined) start = ts;
+      const p = Math.min(1, (ts - start) / SCROLL_MS);
+      scroller.scrollTop = from + (to - from) * p;
+      if (p < 1) requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  };
+})();`,
+            }}
+          />
         </div>
       </AppContainer>
     </Layout>
