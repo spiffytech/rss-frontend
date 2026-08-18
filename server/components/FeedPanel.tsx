@@ -6,20 +6,13 @@ interface FeedPanelProps {
   categories: MinifluxCategoryCount[]
   feeds: MinifluxFeed[]
   counters: Record<string, number>
-  /** Preserve the current view mode in generated nav links. */
-  viewMode: 'expanded' | 'list'
-  /** Preserve the hide-read-items toggle in generated nav links. */
-  hideReadItems?: boolean
-  /** Preserve the per-feed sort in generated nav links. */
-  sort?: 'oldest' | 'newest'
 }
 
-/** Feed favicon served through our proxy (Miniflux needs the auth header). */
 /** Letter avatar shown only if the feed's favicon fails to load. */
-const FeedLetter: FC<{ title: string }> = ({ title }) => (
+const FeedLetter: FC<{ title: string; feedId: number }> = ({ title, feedId }) => (
   <span
     class="inline-flex items-center justify-center w-5 h-5 rounded-sm bg-gray-200 text-gray-600 text-xs font-semibold shrink-0"
-    style="display: none"
+    data-show={`$iconFailed[${feedId}]`}
   >
     {(title.trim()[0] ?? '?').toUpperCase()}
   </span>
@@ -32,12 +25,14 @@ const FeedIcon: FC<{ feedId: number; title: string }> = ({ feedId, title }) => (
       alt=""
       class="w-5 h-5 rounded-sm"
       loading="lazy"
+      data-feed-id={feedId}
+      data-show={`!$iconFailed[${feedId}]`}
     />
-    <FeedLetter title={title} />
+    <FeedLetter title={title} feedId={feedId} />
   </span>
 )
 
-const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters, viewMode, hideReadItems, sort }) => {
+const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters }) => {
   const feedsByCategory = new Map<number, MinifluxFeed[]>()
   for (const feed of feeds) {
     const catId = feed.category?.id ?? 0
@@ -70,15 +65,13 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters, viewMode, 
 
   const totalUnread = Object.values(counters).reduce((a, b) => a + b, 0)
 
-  /** Build a full-page nav URL preserving view mode, read-items and sort. */
+  /** Build an identity-only nav URL (which feed/category/section). View prefs
+   *  (view/sort/hideReadItems) live in signals now, not the URL. */
   const link = (params: Record<string, string | number | null | undefined>) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) {
       if (v != null && v !== '') q.set(k, String(v))
     }
-    if (viewMode === 'list') q.set('view', 'list')
-    if (!hideReadItems) q.set('hideReadItems', '0')
-    if (sort === 'newest') q.set('sort', 'newest')
     const s = q.toString()
     return s ? `/?${s}` : '/'
   }
@@ -87,6 +80,7 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters, viewMode, 
     <aside
       data-testid="feed-panel"
       class="border-r border-gray-200 pr-2 overflow-y-auto min-h-0"
+      data-on:error__capture="if(evt.target && evt.target.matches('img[data-feed-id]')) { $iconFailed[Number(evt.target.dataset.feedId)] = true; }"
     >
       <div class="mb-1">
         <div class="font-semibold text-sm mb-1">Sections</div>
@@ -122,10 +116,21 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters, viewMode, 
               <button
                 type="button"
                 class="group w-full text-left px-2 py-2 rounded hover:bg-gray-100 flex items-center gap-x-2 text-sm font-semibold"
-                data-on:click={`$collapsedCats[${cat.id}] = !$collapsedCats[${cat.id}]`}
+                data-on:click={`$collapsedCats[${cat.id}] = !$collapsedCats[${cat.id}]; @put('/api/prefs/collapsed-cats')`}
               >
                 <span class="flex-1 truncate">
-                  <span data-text={`$collapsedCats[${cat.id}] ? '▸' : '▾'`}></span> {cat.title}
+                  <span data-text={`$collapsedCats[${cat.id}] ? '▸' : '▾'`}></span>{' '}
+                  <span data-show={`!($renameId === ${cat.id} && $renameKind === 'category')`}>{cat.title}</span>
+                  <span class="inline-flex items-center gap-1" data-show={`$renameId === ${cat.id} && $renameKind === 'category'`}>
+                    <input
+                      type="text"
+                      class="w-24 p-0.5 border border-gray-300 rounded text-sm font-normal"
+                      data-bind="renameTitle"
+                      data-on:keydown="if(evt.key === 'Enter'){ @put('/api/categories/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
+                    />
+                    <button type="button" class="text-xs font-normal" data-on:click={`@put('/api/categories/${cat.id}/rename')`}>Save</button>
+                    <button type="button" class="text-xs font-normal" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
+                  </span>
                 </span>
                 <span class="ml-auto relative w-[2.5ch] shrink-0 text-right">
                   <span class="text-xs text-gray-500 group-hover:opacity-0">{cat.total_unread}</span>
@@ -133,7 +138,7 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters, viewMode, 
                     type="button"
                     title="Rename folder"
                     class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
-                    data-on:click__stop={`evt.preventDefault(); const n = prompt('Rename folder "${cat.title.replace(/"/g, '&quot;')}"', ${JSON.stringify(cat.title)}); if (n && n.trim() && n.trim() !== ${JSON.stringify(cat.title)}) location.href = '/api/categories/${cat.id}/rename?title=' + encodeURIComponent(n.trim())`}
+                    data-on:click__stop={`$renameId = ${cat.id}; $renameKind = 'category'; $renameTitle = ${JSON.stringify(cat.title)}`}
                   >
                     ✎
                   </button>
@@ -152,14 +157,26 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters, viewMode, 
                       data-class:bg-gray-100={`$filter.feedId === ${feed.id}`}
                     >
                       <FeedIcon feedId={feed.id} title={feed.title} />
-                      <span class="flex-1 truncate">{feed.title}</span>
+                      <span class="flex-1 truncate">
+                        <span data-show={`!($renameId === ${feed.id} && $renameKind === 'feed')`}>{feed.title}</span>
+                        <span class="inline-flex items-center gap-1" data-show={`$renameId === ${feed.id} && $renameKind === 'feed'`}>
+                          <input
+                            type="text"
+                            class="w-24 p-0.5 border border-gray-300 rounded text-sm"
+                            data-bind="renameTitle"
+                            data-on:keydown="if(evt.key === 'Enter'){ @put('/api/feeds/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
+                          />
+                          <button type="button" class="text-xs" data-on:click={`@put('/api/feeds/${feed.id}/rename')`}>Save</button>
+                          <button type="button" class="text-xs" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
+                        </span>
+                      </span>
                       <span class="ml-auto relative w-[2.5ch] shrink-0 text-right">
                         <span class="text-xs text-gray-500 group-hover:opacity-0">{counters[feed.id] ?? 0}</span>
                         <button
                           type="button"
                           title="Rename feed"
                           class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
-                          data-on:click__stop={`evt.preventDefault(); const n = prompt('Rename feed "${feed.title.replace(/"/g, '&quot;')}"', ${JSON.stringify(feed.title)}); if (n && n.trim() && n.trim() !== ${JSON.stringify(feed.title)}) location.href = '/api/feeds/${feed.id}/rename?title=' + encodeURIComponent(n.trim())`}
+                          data-on:click__stop={`$renameId = ${feed.id}; $renameKind = 'feed'; $renameTitle = ${JSON.stringify(feed.title)}`}
                         >
                           ✎
                         </button>
@@ -185,14 +202,26 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters, viewMode, 
                   data-class:bg-gray-100={`$filter.feedId === ${feed.id}`}
                 >
                   <FeedIcon feedId={feed.id} title={feed.title} />
-                  <span class="flex-1 truncate">{feed.title}</span>
+                  <span class="flex-1 truncate">
+                        <span data-show={`!($renameId === ${feed.id} && $renameKind === 'feed')`}>{feed.title}</span>
+                        <span class="inline-flex items-center gap-1" data-show={`$renameId === ${feed.id} && $renameKind === 'feed'`}>
+                          <input
+                            type="text"
+                            class="w-24 p-0.5 border border-gray-300 rounded text-sm"
+                            data-bind="renameTitle"
+                            data-on:keydown="if(evt.key === 'Enter'){ @put('/api/feeds/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
+                          />
+                          <button type="button" class="text-xs" data-on:click={`@put('/api/feeds/${feed.id}/rename')`}>Save</button>
+                          <button type="button" class="text-xs" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
+                        </span>
+                      </span>
                       <span class="ml-auto relative w-[2.5ch] shrink-0 text-right">
                         <span class="text-xs text-gray-500 group-hover:opacity-0">{counters[feed.id] ?? 0}</span>
                         <button
                           type="button"
                           title="Rename feed"
                           class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
-                          data-on:click__stop={`evt.preventDefault(); const n = prompt('Rename feed "${feed.title.replace(/"/g, '&quot;')}"', ${JSON.stringify(feed.title)}); if (n && n.trim() && n.trim() !== ${JSON.stringify(feed.title)}) location.href = '/api/feeds/${feed.id}/rename?title=' + encodeURIComponent(n.trim())`}
+                          data-on:click__stop={`$renameId = ${feed.id}; $renameKind = 'feed'; $renameTitle = ${JSON.stringify(feed.title)}`}
                         >
                           ✎
                         </button>

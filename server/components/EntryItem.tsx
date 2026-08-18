@@ -19,7 +19,9 @@ const EntryItem: FC<EntryItemProps> = ({ entry, viewMode }) => {
     <article
       id={`entry-${id}`}
       data-entry-id={id}
+      data-track-top={id}
       class={`msgFrame px-2 py-2 ${unread ? 'bg-white' : 'bg-gray-50 text-gray-500'}`}
+      data-class={`{ 'ring-1 ring-cyan-500/60': $currentId === ${id} }`}
       {...{
         'data-on-intersect-line':
           unread && isExpandedView

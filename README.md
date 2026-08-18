@@ -12,12 +12,16 @@ bun run build:css
 Env vars (inline at launch — the harness forbids `.env` files):
 
 ```
-MINIFLUX_URL=https://miniflux.example.org
-MINIFLUX_API_TOKEN=your-miniflux-api-token   # bootstrap credential
-SESSION_SECRET=<long random string>          # signs session cookies
+minifluxUrl=https://miniflux.example.org
+sessionSecret=<long random string>          # signs session cookies
+prefsDbPath=./data/prefs.sqlite            # per-account pref store (SQLite)
 ```
 
-Generate the API token in Miniflux under **Settings > API Keys > Create a new API key**.
+`prefsDbPath` defaults to `./data/prefs.sqlite`. It holds per-account reader
+preferences (keyed by Miniflux user id) that Miniflux itself can't store:
+per-feed view defaults (view mode / sort / hide-read-items), plus account-wide
+`hideEmptyFeeds`, collapsed categories, and disabled-auto-read feeds. In
+Docker, point it at a persistent volume (see `compose.yml`).
 
 ## Run
 
@@ -27,9 +31,7 @@ bun run dev        # http://localhost:3007
 
 ## Authentication
 
-The app is locked behind a sign-in using your Miniflux account (HTTP Basic against `/v1/me`). On login it mints a per-session Miniflux API key, stores it in an HMAC-signed `httpOnly` cookie, and replays that key on every backend call. Logout revokes the key on Miniflux and clears the cookie.
-
-Why `MINIFLUX_API_TOKEN` still exists: it's the bootstrap/admin credential — used to *create* session API keys at login (`POST /v1/api-keys`) and as a fallback when no session is active. Normal use never touches it.
+The app is locked behind a sign-in using your Miniflux account. On login it validates via HTTP Basic against `/v1/me`, then mints a per-session Miniflux API key scoped to that user (`POST /v1/api-keys` with Basic auth), stores it in an HMAC-signed `httpOnly` cookie, and replays that key on every backend call — so the session operates as the logged-in account, not as a shared admin. Logout revokes the key on Miniflux and clears the cookie. No bootstrap/admin token is needed; each user's own credentials scope their key.
 
 ## Scripts
 
@@ -49,13 +51,13 @@ Why `MINIFLUX_API_TOKEN` still exists: it's the bootstrap/admin credential — u
 - **Auto-read on scroll** — unread entries that scroll into view are marked read (expanded view).
 - **Keyboard shortcuts** — `j`/`k` prev/next, `m` toggle read, `s` star, `v` view mode, `Shift+A` mark all read.
 - **Mark all read / Refresh / Sign out** in the `⋯` menu.
-- **Navigation** — sidebar, view, sort and show-read-items are full-page loads (URL is the state); only search, mutations and the CSS-only show-read-feeds toggle stay client-side.
+- **Navigation** — the sidebar navigates between feeds/categories via plain URL links (URL carries identity: `?feed=…&category=…&starred=1&search=…`). View mode, sort, and show-read-items are *not* URL state — they are signals toggled inline and persisted per-feed on the server, so opening a feed always restores your last view for it.
 
 ## Architecture
 
 - `server/hono.tsx` — Hono app entry; auth middleware, login/logout routes, static + route mounting.
 - `server/routes/*.tsx` — `index` renders `GET /`; `api` handles datastar SSE endpoints (per-row patches).
-- `server/lib/*` — `miniflux.ts` (typed REST client, request-scoped credentials via `AsyncLocalStorage`), `auth.ts` (HMAC session cookie), `config.ts`, `assets.ts` (content-hashed CSS URL from build manifest), `util.ts`, `types.ts`.
+- `server/lib/*` — `miniflux.ts` (typed REST client, request-scoped credentials via `AsyncLocalStorage`), `auth.ts` (HMAC session cookie), `config.ts`, `prefs.ts` (per-account SQLite preference store), `assets.ts` (content-hashed CSS URL from build manifest), `util.ts`, `types.ts`.
 - `server/components/*` — JSX components (Layout, TopToolbar, FeedPanel, EntryList, EntryItem).
 
 ## Notes

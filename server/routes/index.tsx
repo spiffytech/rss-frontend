@@ -5,10 +5,14 @@ import IndexView from '../views/index'
 import * as miniflux from '../lib/miniflux'
 import { computeUnreadCount } from '../lib/util'
 import { cssUrl } from '../lib/assets'
+import { readSession } from '../lib/auth'
+import { getUserPrefs, getFeedPrefs } from '../lib/prefs'
 import type { EntriesFilter, MinifluxFeed } from '../lib/types'
 
-/** Parse the filter + view from the URL query string (e.g. ?feed=155&starred=1&view=list). */
-function parseFilterFromUrl(query: URLSearchParams): { filter: EntriesFilter; viewMode: 'expanded' | 'list' } {
+/** Parse the identity filter from the URL query string (e.g. ?feed=155&starred=1&search=x).
+ *  View prefs (view/sort/hideReadItems) are NOT in the URL — they come from the
+ *  per-account store (or hardcoded defaults) during SSR. */
+function parseFilterFromUrl(query: URLSearchParams): EntriesFilter {
   const filter: EntriesFilter = {
     status: 'unread',
   }
@@ -19,12 +23,7 @@ function parseFilterFromUrl(query: URLSearchParams): { filter: EntriesFilter; vi
   if (query.get('starred') === '1') filter.starred = true
   const search = query.get('search')
   if (search) filter.search = search
-  if (query.get('sort') === 'newest') filter.sort = 'newest'
-  // Hide read items by default; only ?hideReadItems=0 reveals them. An absent
-  // value must mean "hide", so default true here — !undefined would leak read.
-  filter.hideReadItems = query.get('hideReadItems') !== '0'
-  const viewMode = query.get('view') === 'list' ? 'list' : 'expanded'
-  return { filter, viewMode }
+  return filter
 }
 
 /** 404 page for dead/nonexistent feeds. Reuses login-card aesthetic. */
@@ -65,7 +64,17 @@ const NotFoundPage: FC<{ feedId: number }> = ({ feedId }) => {
   )
 }
 export const indexRoutes = new Hono().get('/', async (ctx) => {
-  const { filter, viewMode } = parseFilterFromUrl(new URL(ctx.req.url).searchParams)
+  const filter = parseFilterFromUrl(new URL(ctx.req.url).searchParams)
+  const session = readSession(ctx)
+  const userPrefs = session?.userId != null ? getUserPrefs(session.userId) : {}
+  // Per-feed view defaults override the hardcoded global defaults.
+  const feedPrefs =
+    session?.userId != null && filter.feedId != null
+      ? getFeedPrefs(session.userId, Number(filter.feedId))
+      : null
+  const viewMode: 'expanded' | 'list' = feedPrefs?.viewMode ?? 'expanded'
+  filter.sort = feedPrefs?.sort ?? 'oldest'
+  filter.hideReadItems = feedPrefs?.hideReadItems ?? true
   try {
     const [feeds, categories, counters, page] = await Promise.all([
       miniflux.getFeeds(),
@@ -96,6 +105,7 @@ export const indexRoutes = new Hono().get('/', async (ctx) => {
         initialViewMode={viewMode}
         currentTitle={currentTitle}
         unreadCount={unreadCount}
+        userPrefs={userPrefs}
       />,
     )
   } catch (err) {

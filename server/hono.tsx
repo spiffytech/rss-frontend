@@ -5,8 +5,7 @@ import { logger } from 'hono/logger'
 import { indexRoutes } from './routes/index'
 import { apiRoutes } from './routes/api'
 import { readSession, writeSession, clearSession } from './lib/auth'
-import { minifluxContext, MinifluxError, authenticateWithPassword, createApiKey, deleteApiKey } from './lib/miniflux'
-import { loadConfig } from './lib/config'
+import { minifluxContext, MinifluxError, authenticateWithPassword, createApiKeyAs, deleteApiKey } from './lib/miniflux'
 import { cssUrl } from './lib/assets'
 
 const app = new Hono()
@@ -186,28 +185,35 @@ app.get('/login', (ctx) =>
 
 /**
  * POST /api/login — validate credentials against Miniflux, mint a per-session
- * API key, and set the signed session cookie. Reuses the bootstrap env token
- * only for the key-creation call itself until the session is established.
+ * API key owned by the logged-in user, and set the signed session cookie.
+ * The key is created with the user's own Basic credentials so the session
+ * operates as that account (not the bootstrap admin). The bootstrap env token
+ * is a fallback for unauthenticated/admin paths, never the session identity.
  */
 app.post('/api/login', async (ctx) => {
   const { username, password } = await readBody(ctx)
   if (!username || !password) {
     return ctx.json({ error: 'username and password required' }, 400)
   }
+  let userId: number
   try {
-    await authenticateWithPassword(username, password)
+    // authenticateWithPassword validates via Basic auth and returns the id of
+    // the user who actually logged in — the correct key for the pref store.
+    ({ id: userId } = await authenticateWithPassword(username, password))
   } catch (err) {
     if (err instanceof MinifluxError && (err.status === 401 || err.status === 403)) {
       return ctx.json({ error: 'invalid credentials' }, 401)
     }
     throw err
   }
-  // Inside the bootstrap credential context, create a per-session API key.
-  const { id, token } = await minifluxContext.run(
-    { token: loadConfig().minifluxApiToken },
-    () => createApiKey(`miniflux-frontend session ${new Date().toISOString()}`),
+  // Create an API key owned by the authenticated user (Basic auth scopes the
+  // key to them, not to the bootstrap admin).
+  const { id, token } = await createApiKeyAs(
+    username,
+    password,
+    `miniflux-frontend session ${new Date().toISOString()}`,
   )
-  writeSession(ctx, { token, keyId: id, username })
+  writeSession(ctx, { token, keyId: id, username, userId })
   return ctx.json({ ok: true })
 })
 

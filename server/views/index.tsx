@@ -6,6 +6,7 @@ import TopToolbar from '../components/TopToolbar'
 import FeedPanel from '../components/FeedPanel'
 import EntryList from '../components/EntryList'
 import type { EntriesFilter, MinifluxCategoryCount, MinifluxEntry, MinifluxFeed } from '../lib/types'
+import type { UserPrefs } from '../lib/prefs'
 
 interface IndexViewProps {
   feeds: MinifluxFeed[]
@@ -19,11 +20,9 @@ interface IndexViewProps {
   currentTitle: string
   /** Unread count for the current feed/section, or null when not meaningful (Starred). */
   unreadCount: number | null
+  /** Account-wide prefs hydrated from the store during SSR. */
+  userPrefs: UserPrefs
 }
-
-/** Datastar expression (string) that serializes the live signals into a URL query string. */
-const toQueryStringExpr = (): string =>
-  "((Number($filter.feedId||'') ? 'feed=' + $filter.feedId : '') + (Number($filter.categoryId||'') ? '&category=' + $filter.categoryId : '') + ($filter.starred ? '&starred=1' : '') + ($filter.search ? '&search=' + encodeURIComponent($filter.search) : '') + ($filter.sort === 'newest' ? '&sort=newest' : '') + ($hideReadItems ? '' : '&hideReadItems=0') + ($viewMode === 'list' ? '&view=list' : '')).replace(/^&/, '')"
 
 const IndexView: FC<IndexViewProps> = ({
   feeds,
@@ -36,6 +35,7 @@ const IndexView: FC<IndexViewProps> = ({
   initialViewMode,
   currentTitle,
   unreadCount,
+  userPrefs,
 }) => {
   const filter: Record<string, unknown> = {
     status: initialFilter.status ?? 'unread',
@@ -51,18 +51,33 @@ const IndexView: FC<IndexViewProps> = ({
     currentTitle,
     unreadCount,
     userHasScrolled: false,
-    collapsedCats: {} as Record<number, boolean>,
+    // Account-wide prefs (server-side, per Miniflux user). `user` scope.
+    hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? true,
+    collapsedCats: (userPrefs.collapsedCats ?? {}) as Record<number, boolean>,
+    disabledAutoReadFeeds: (userPrefs.disabledAutoReadFeeds ?? []) as number[],
     keepUnreadIds: [] as number[],
+    hideReadItems: (initialFilter.hideReadItems ?? true) as boolean,
+    // Icon fallback state (delegated error handler on the feed panel).
+    iconFailed: {} as Record<number, boolean>,
+    // The reading anchor: which entry is currently at the top of the viewport.
+    // The server seeds it with the first rendered entry id (an un-scrolled list
+    // always starts at the top), and the `track-top` plugin refreshes it as the
+    // user scrolls. It's a plain number, never null — an empty list renders no
+    // navigable entries, so the fallback 0 is never a real target.
+    currentId: entries[0]?.id ?? 0,
+    // Transient target for the scroll-into-view watcher. Self-clears so a nav
+    // request can't re-trigger, and the scroll watcher never writes currentId,
+    // so user scroll → currentId patch → no scrollIntoView loop.
+    navRequest: null as number | null,
     // Ids of the entries currently rendered in the list. The server owns this
     // signal (patched on every list replace/append), so "mark all read" and
     // friends are plain `@put` calls — datastar sends the ids along with the
     // rest of the view state. No DOM scraping.
     entryIds: entries.map((e) => e.id),
-    // Persisted preferences (localStorage), deliberately NOT in the URL.
-    hideEmptyFeeds: true,
-    hideReadItems: initialFilter.hideReadItems ?? true,
-    // Per-feed auto-read disable (persisted). Default: auto-read on for all.
-    disabledAutoReadFeeds: [] as number[],
+    // Inline rename editor state.
+    renameId: null as number | null,
+    renameKind: null as 'feed' | 'category' | null,
+    renameTitle: '',
     // Infinite-scroll pagination state.
     nextCursor: nextCursor ?? null,
     hasMore: hasMore ?? false,
@@ -73,11 +88,11 @@ const IndexView: FC<IndexViewProps> = ({
     sidebarOpen: false,
   }
   const keydown = [
-    "if(evt.key === 'j'){ window.dsNav(1); }",
-    "if(evt.key === 'k'){ window.dsNav(-1); }",
-    "if(evt.key === 'm'){ const id = window.dsCurrentId(); if(id){ @post('/api/entries/' + id + '/toggle-read'); } }",
-    "if(evt.key === 's'){ const id = window.dsCurrentId(); if(id){ @post('/api/entries/' + id + '/star'); } }",
-    "if(evt.key === 'v'){ const q = new URLSearchParams(location.search); q.set('view', $viewMode === 'expanded' ? 'list' : 'expanded'); location.href = location.pathname + '?' + q.toString(); }",
+    "if(evt.key === 'j' || evt.key === 'ArrowDown'){ evt.preventDefault(); const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.min($entryIds.length - 1, i + 1)]; $navRequest = $currentId; }",
+    "if(evt.key === 'k' || evt.key === 'ArrowUp'){ evt.preventDefault(); const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.max(0, i - 1)]; $navRequest = $currentId; }",
+    "if(evt.key === 'm'){ @post('/api/entries/' + $currentId + '/toggle-read'); }",
+    "if(evt.key === 's'){ @post('/api/entries/' + $currentId + '/star'); }",
+    "if(evt.key === 'v'){ $viewMode = $viewMode === 'expanded' ? 'list' : 'expanded'; @put('/api/prefs/view-mode'); }",
     "if(evt.key === 'A' && evt.shiftKey){ @put('/api/mark-all-read'); }",
   ].join(' ')
   return (
@@ -85,20 +100,22 @@ const IndexView: FC<IndexViewProps> = ({
       <AppContainer
         signals={signals}
         onKeydown={keydown}
-        watchFilter={`history.replaceState(null, '', window.location.pathname + '?' + (${toQueryStringExpr()}))`}
         className="grid grid-rows-[auto_1fr] app-container flex-1 min-h-0"
       >
         <TopToolbar
           currentTitle={currentTitle}
           unreadCount={unreadCount}
-          filter={{
-            feedId: initialFilter.feedId ?? null,
-            sort: initialFilter.sort ?? 'oldest',
-            viewMode: initialViewMode,
-            hideReadItems: initialFilter.hideReadItems ?? true,
-          }}
+          filter={{ feedId: initialFilter.feedId ?? null }}
         />
         <div class="relative grid grid-cols-1 md:grid-cols-[var(--sidebar-w)_1fr] gap-x-3 min-h-0 overflow-hidden">
+          {/* Scroll-into-view watcher for nav: one DOM effect for the whole app
+              (navigation is a state transition; only the actual scroll is
+              geometry, done here natively). */}
+          <div
+            class="hidden"
+            data-on-signal-patch-filter="{include: /^navRequest$/}"
+            data-on-signal-patch="$navRequest != null && (document.getElementById('entry-' + $navRequest)?.scrollIntoView({block:'start', behavior:'smooth'}), $navRequest = null)"
+          ></div>
           {/* Sidebar: static column on md+ (forced by the `!important` rule in
               main.css), off-canvas drawer on mobile toggled by `data-show`.
               NOTE: no `max-md:hidden` class here — `data-show` shows an element
@@ -116,7 +133,7 @@ const IndexView: FC<IndexViewProps> = ({
                 ✕
               </button>
             </div>
-            <FeedPanel categories={categories} feeds={feeds} counters={counters} viewMode={initialViewMode} hideReadItems={initialFilter.hideReadItems ?? true} sort={initialFilter.sort} />
+            <FeedPanel categories={categories} feeds={feeds} counters={counters} />
           </div>
           {/* Scrim on mobile while the drawer is open. Initial inline
               `display:none` prevents a black flash before Datastar boots

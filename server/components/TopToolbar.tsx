@@ -3,12 +3,9 @@ import type { FC, PropsWithChildren } from 'hono/jsx'
 interface TopToolbarProps {
   currentTitle: string
   unreadCount: number | null
-  /** Current nav state (from the URL) so menu rows can build full-page links. */
+  /** Current nav state (from the URL) so menu rows know which feed is active. */
   filter: {
     feedId?: number | string | null
-    sort?: 'oldest' | 'newest'
-    viewMode: 'expanded' | 'list'
-    hideReadItems?: boolean
   }
 }
 
@@ -18,7 +15,7 @@ interface TopToolbarProps {
  * the button (`absolute right-0`), and the button is pinned to the toolbar's
  * right edge (`ml-auto`) so it never wraps to a spot with no room on its right. */
 const Menu: FC<PropsWithChildren<{ label: string }>> = ({ label, children }) => (
-  <div class="relative ml-auto">
+  <div       class="relative ml-auto order-1 md:order-none">
     <button
       type="button"
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
@@ -40,13 +37,13 @@ const Menu: FC<PropsWithChildren<{ label: string }>> = ({ label, children }) => 
   </div>
 )
 
-/** A toggle row inside a menu, with a check. Used for CSS-only prefs
- * (show-read-feeds); rows that change server output are full-page links. */
-const MenuToggle: FC<{ signal: string; label: string }> = ({ signal, label }) => (
+/** A toggle row inside a menu, with a check. Persists via a `@put` after
+ *  flipping the signal (datastar sends the new value implicitly). */
+const MenuToggle: FC<{ signal: string; label: string; persistUrl: string }> = ({ signal, label, persistUrl }) => (
   <button
     type="button"
     class="w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2"
-    data-on:click={`$${signal} = !$${signal}`}
+    data-on:click={`$${signal} = !$${signal}; @put('${persistUrl}')`}
   >
     <span data-text={`$${signal} ? '✓' : ''`} class="w-4 inline-block"></span>
     {label}
@@ -54,16 +51,7 @@ const MenuToggle: FC<{ signal: string; label: string }> = ({ signal, label }) =>
 )
 
 const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) => {
-  /** Build a full-page nav URL preserving the given params (lean into SSR). */
-  const link = (params: Record<string, string | number | null | undefined>): string => {
-    const q = new URLSearchParams()
-    for (const [k, v] of Object.entries(params)) {
-      if (v != null && v !== '') q.set(k, String(v))
-    }
-    const s = q.toString()
-    return s ? `/?${s}` : '/'
-  }
-  const { feedId, sort = 'oldest', viewMode, hideReadItems } = filter
+  const { feedId } = filter
 
   return (
   <header class="flex flex-wrap items-center gap-x-2 gap-y-1 py-2 border-b-2 border-gray-300 mb-2">
@@ -115,23 +103,23 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
     {/* Prev / next story */}
     <button
       type="button"
-      class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
+      class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-2 md:order-none"
       title="Previous (k)"
-      data-on:click="window.dsNav(-1)"
+      data-on:click="const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.max(0, i - 1)]; $navRequest = $currentId;"
     >
       ▲
     </button>
     <button
       type="button"
-      class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
+      class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-3 md:order-none"
       title="Next (j)"
-      data-on:click="window.dsNav(1)"
+      data-on:click="const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.min($entryIds.length - 1, i + 1)]; $navRequest = $currentId;"
     >
       ▼
     </button>
     <button
       type="button"
-      class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
+      class="hidden md:block px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
       title="Mark all read (Shift+A)"
       data-on:click={`@put('/api/mark-all-read')`}
     >
@@ -149,53 +137,41 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
     />
 
     <Menu label="View options">
-      <a
-        href={link({
-          feed: feedId,
-          sort: viewMode === 'expanded' ? undefined : sort,
-          hideReadItems: hideReadItems ? undefined : 0,
-          view: viewMode === 'expanded' ? 'list' : undefined,
-        })}
+      <button
+        type="button"
         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 block"
+        data-on:click={`$viewMode = $viewMode === 'expanded' ? 'list' : 'expanded'; @put('/api/prefs/view-mode')`}
       >
-        {viewMode === 'expanded' ? 'List view' : 'Expanded view'}
-      </a>
+        <span data-text={`$viewMode === 'expanded' ? 'List view' : 'Expanded view'`}></span>
+      </button>
       {feedId != null && feedId !== '' && (
-        <a
-          href={link({
-            feed: feedId,
-            sort: sort === 'newest' ? 'oldest' : 'newest',
-            hideReadItems: hideReadItems ? undefined : 0,
-            view: viewMode === 'list' ? 'list' : undefined,
-          })}
+        <button
+          type="button"
           class="w-full text-left px-3 py-1.5 hover:bg-gray-100 block"
+          data-on:click={`$filter.sort = $filter.sort === 'newest' ? 'oldest' : 'newest'; @put('/api/prefs/sort')`}
         >
-          {sort === 'newest' ? 'Newest first' : 'Oldest first'}
-        </a>
+          <span data-text={`$filter.sort === 'newest' ? 'Newest first' : 'Oldest first'`}></span>
+        </button>
       )}
       {feedId != null && feedId !== '' && (
         <button
           type="button"
           class="w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2"
-          data-on:click={`$disabledAutoReadFeeds = $disabledAutoReadFeeds.includes(${feedId}) ? $disabledAutoReadFeeds.filter(f => f !== ${feedId}) : [...$disabledAutoReadFeeds, ${feedId}]; $menuOpen = false`}
+          data-on:click={`$disabledAutoReadFeeds = $disabledAutoReadFeeds.includes(${feedId}) ? $disabledAutoReadFeeds.filter(f => f !== ${feedId}) : [...$disabledAutoReadFeeds, ${feedId}]; @put('/api/prefs/auto-read'); $menuOpen = false`}
         >
           <span class="w-4 inline-block" data-text={`$disabledAutoReadFeeds.includes(${feedId}) ? '✓' : ''`}></span>
           Disable auto-read
         </button>
       )}
-      <MenuToggle signal="hideEmptyFeeds" label="Hide empty feeds" />
-      <a
-        href={link({
-          feed: feedId,
-          sort: sort === 'newest' ? 'newest' : undefined,
-          hideReadItems: hideReadItems ? 0 : undefined,
-          view: viewMode === 'list' ? 'list' : undefined,
-        })}
+      <MenuToggle signal="hideEmptyFeeds" label="Hide empty feeds" persistUrl="/api/prefs/hide-empty-feeds" />
+      <button
+        type="button"
         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2"
+        data-on:click={`$hideReadItems = !$hideReadItems; @put('/api/prefs/hide-read-items')`}
       >
-        <span class="w-4 inline-block">{hideReadItems ? '✓' : ''}</span>
+        <span class="w-4 inline-block" data-text={`$hideReadItems ? '✓' : ''`}></span>
         Hide read items
-      </a>
+      </button>
       <button
         type="button"
         class="w-full text-left px-3 py-1.5 hover:bg-gray-100"

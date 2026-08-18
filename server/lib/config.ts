@@ -1,30 +1,32 @@
 export interface Config {
   minifluxUrl: string
-  minifluxApiToken: string
   sessionSecret: string
+  /** Path to the SQLite file holding per-account reader preferences. */
+  prefsDbPath: string
 }
 
+/** Hardcoded dev-only fallback so `bun dev` boots with no env. Never used in
+ *  production — loadConfig requires a real sessionSecret when NODE_ENV is
+ *  production (the Dockerfile/compose set it). The secret signs the session
+ *  cookie, which carries the user's live Miniflux API key, so it must be
+ *  unpredictable outside local dev. */
+const DEV_SESSION_SECRET = 'dev-only-insecure-session-secret-do-not-use'
+
 export function loadConfig(): Config {
-  const minifluxUrl = process.env.MINIFLUX_URL
-  const minifluxApiToken = process.env.MINIFLUX_API_TOKEN
-  const sessionSecret = process.env.SESSION_SECRET
+  const minifluxUrl = process.env.minifluxUrl
+  const isProd = process.env.NODE_ENV === 'production'
+  const sessionSecret = process.env.sessionSecret ?? (isProd ? undefined : DEV_SESSION_SECRET)
 
   if (!minifluxUrl) {
-    throw new Error('MINIFLUX_URL is not set. Set it in a .env file.')
-  }
-  // The API token is needed at minimum as a bootstrap credential: the first
-  // login validates a password against Miniflux, but session-less deploys and
-  // admin access rely on it too. It also parallels the pre-auth setup path.
-  if (!minifluxApiToken) {
-    throw new Error('MINIFLUX_API_TOKEN is not set. Set it in a .env file.')
+    throw new Error('minifluxUrl is not set. Set it in a .env file.')
   }
   if (!sessionSecret) {
-    throw new Error('SESSION_SECRET is not set. Set it to a long random string.')
+    throw new Error('sessionSecret is not set. Set it to a long random string.')
   }
 
   return {
     minifluxUrl: minifluxUrl.replace(/\/+$/, ''),
-    minifluxApiToken,
     sessionSecret,
+    prefsDbPath: process.env.prefsDbPath || './data/prefs.sqlite',
   }
 }

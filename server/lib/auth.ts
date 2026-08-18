@@ -13,6 +13,8 @@ export interface Session {
   keyId: number
   /** Username the session belongs to (informational). */
   username: string
+  /** Miniflux user id — keys the per-account preference store. */
+  userId?: number
 }
 
 /**

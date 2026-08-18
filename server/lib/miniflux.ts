@@ -30,9 +30,14 @@ class MinifluxError extends Error {
   }
 }
 
-/** Generic Miniflux request using the request-scoped (or env) credential. */
+/** Generic Miniflux request using the request-scoped session credential. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = minifluxContext.getStore()?.token ?? config.minifluxApiToken
+  const token = minifluxContext.getStore()?.token
+  if (!token) {
+    throw new Error(
+      'No Miniflux credential: this request has no session API key. All Miniflux calls must run inside minifluxContext.run({ token }, …).',
+    )
+  }
   const url = `${config.minifluxUrl}/v1${path}`
   const res = await fetch(url, {
     ...init,
@@ -177,11 +182,15 @@ export function getEntry(entryId: number): Promise<MinifluxEntry> {
   return request(`/entries/${entryId}`)
 }
 
-/** Authenticate a user's Miniflux username/password (HTTP Basic). */
+/** Authenticate a user's Miniflux username/password (HTTP Basic).
+ *  /v1/me is the only endpoint accepting Basic auth, so we capture the
+ *  authenticated user's `id` here — NOT from a call made with a token, which
+ *  would resolve to the token owner (the bootstrap admin) instead of the user
+ *  who actually logged in. This id keys the per-account preference store. */
 export async function authenticateWithPassword(
   username: string,
   password: string,
-): Promise<{ username: string }> {
+): Promise<{ id: number; username: string }> {
   const url = `${config.minifluxUrl}/v1/me`
   const res = await fetch(url, {
     headers: {
@@ -199,15 +208,42 @@ export async function authenticateWithPassword(
     }
     throw new MinifluxError(`Miniflux ${res.status}: ${detail}`, res.status)
   }
-  return (await res.json()) as { username: string }
+  return (await res.json()) as { id: number; username: string }
 }
 
-/** Create a per-session Miniflux API key for the authenticated user. */
-export async function createApiKey(description: string): Promise<{ id: number; token: string }> {
-  return request('/api-keys', {
+/**
+ * Create an API key scoped to a specific user, authenticated with that user's
+ * own username/password (HTTP Basic). Miniflux POST /v1/api-keys creates the
+ * key for the authenticated principal, so a token-scoped call would mint the
+ * key for the *token owner* (the bootstrap admin). Using Basic credentials
+ * makes the session key belong to the user who actually logged in, so every
+ * subsequent call operates as that account — not as admin.
+ */
+export async function createApiKeyAs(
+  username: string,
+  password: string,
+  description: string,
+): Promise<{ id: number; token: string }> {
+  const url = `${config.minifluxUrl}/v1/api-keys`
+  const res = await fetch(url, {
     method: 'POST',
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${username}:${password}`, 'utf8').toString('base64')}`,
+      'Content-Type': 'application/json',
+    },
     body: JSON.stringify({ description }),
   })
+  if (!res.ok) {
+    let detail = res.statusText
+    try {
+      const body = (await res.json()) as { error_message?: string }
+      if (body.error_message) detail = body.error_message
+    } catch {
+      // ignore
+    }
+    throw new MinifluxError(`Miniflux ${res.status}: ${detail}`, res.status)
+  }
+  return (await res.json()) as { id: number; token: string }
 }
 
 /** Delete a feed (unsubscribe). */

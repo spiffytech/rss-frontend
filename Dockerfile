@@ -15,6 +15,7 @@ RUN bun run build
 FROM base
 WORKDIR /home/bun/app
 ENV NODE_ENV=production
+ENV prefsDbPath=/data/prefs.sqlite
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile --no-save --production
 # tsconfig.json is read by Bun at runtime for the hono/jsx transform.
@@ -22,6 +23,8 @@ COPY tsconfig.json ./
 COPY server server
 COPY public public
 COPY --from=builder /home/bun/app/public/ public/
+# Per-account preference store (SQLite) — writable by the `bun` user.
+RUN mkdir -p /data && chown bun:bun /data
 USER bun
 # Bun auto-serves the default-exported Hono app on $PORT (default 3000).
 CMD ["bun", "run", "server/hono.tsx"]

@@ -27,102 +27,44 @@ const Layout: FC<PropsWithChildren<LayoutProps>> = ({ title = 'Miniflux Reader',
         ></script>
         <script
           dangerouslySetInnerHTML={{
-            __html: `window.dsGetPath = null;
-// Return the id of the story currently at the top of the list container
-// (first element whose top is at/just below the container top, partial
-// visibility counts). Used by m/s keys and by dsNav as the anchor.
-window.dsCurrentId = () => {
-  const wrapper = Array.from(document.querySelectorAll('div')).find(d => d.hasAttribute('data-on:scroll'));
-  const items = Array.from(document.querySelectorAll('[data-entry-id]'));
-  if (!wrapper) return null;
-  const top = wrapper.getBoundingClientRect().top;
-  for (const el of items) {
-    if (el.getBoundingClientRect().bottom > top) return Number(el.getAttribute('data-entry-id'));
-  }
-  return null;
-};
-// dsNav is a dumb forward/back button. It finds whatever story is at the TOP
-// of the list container, then advances one story forward (▼) or back (▲) in
-// DOM order, and snaps that story's top flush to the container's top. No
-// hover, no selection, no skip-read — it never inspects read state.
-window.dsNav = (dir) => {
-  const wrapper = Array.from(document.querySelectorAll('div')).find(d => d.hasAttribute('data-on:scroll'));
-  const items = Array.from(document.querySelectorAll('[data-entry-id]'));
-  if (!items.length || !wrapper) return null;
-
-  // Anchor on the story currently at the top of the container.
-  const wrapperRect = wrapper.getBoundingClientRect();
-  let anchorIdx = items.findIndex(el => el.getBoundingClientRect().top >= wrapperRect.top - 8);
-  if (anchorIdx === -1) anchorIdx = items.length; // nothing below the top edge — end of list
-
-  let target = null;
-  if (dir > 0) {
-    for (let i = Math.min(anchorIdx + 1, items.length - 1); i < items.length; i++) { target = items[i]; break; }
-  } else {
-    for (let i = anchorIdx - 1; i >= 0; i--) { target = items[i]; break; }
-  }
-  if (!target) return null;
-
-  // Snap target flush to the container's top. Single DOM touch.
-  const targetId = Number(target.getAttribute('data-entry-id'));
-  const targetRect = target.getBoundingClientRect();
-  wrapper.scrollTop = wrapper.scrollTop + (targetRect.top - wrapperRect.top);
-  return targetId;
-};
-document.addEventListener('error', (e) => {
-  const target = e.target;
-  if (target instanceof HTMLImageElement && target.closest('aside[data-testid="feed-panel"]')) {
-    target.style.display = 'none';
-    const letter = target.nextElementSibling;
-    if (letter instanceof HTMLElement) letter.style.display = 'inline-flex';
-  }
-}, true);
-// Persisted reader preferences (NOT in the URL) — boot from localStorage, save on change.
+            __html: `// Consolidated datastar plugin bootstrap. One import; registers:
+//   - on-intersect-line (auto-read line; scroll-container-relative)
+//   - on-intersect (infinite-scroll sentinel; shadow of the built-in so we
+//     can root the observer at the scroll container and add a preload margin)
+//   - track-top ($currentId ground truth — which entry is at the top)
+// Navigation, auto-read, icon fallback and all prefs are signal-driven in the
+// server HTML; no window.* helpers remain.
 document.addEventListener('datastar-ready', () => {
-  import('https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.2/bundles/datastar.js').then((mod) => {
-    window.dsGetPath = mod.getPath;
-    const saved = localStorage.getItem('mf-prefs');
-    if (saved) {
-      try {
-        mod.mergePatch(JSON.parse(saved));
-      } catch {}
-    }
-  });
-});
-document.addEventListener('datastar-ready', () => {
-  import('https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.2/bundles/datastar.js').then(({ getPath }) => {
-    const save = () => {
-      try {
-        localStorage.setItem('mf-prefs', JSON.stringify({
-          hideEmptyFeeds: getPath('hideEmptyFeeds'),
-          hideReadItems: getPath('hideReadItems'),
-          disabledAutoReadFeeds: getPath('disabledAutoReadFeeds'),
-        }));
-      } catch {}
-    };
-    // Save on patch events for the pref signals.
-    document.addEventListener('datastar-signal-patch', (e) => {
-      const patch = e.detail || {};
-      if ('hideEmptyFeeds' in patch || 'hideReadItems' in patch || 'disabledAutoReadFeeds' in patch) save();
-    });
-  });
-});
-document.addEventListener('datastar-ready', () => {
-  import('https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.2/bundles/datastar.js').then(({ attribute }) => {
+  import('https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.2/bundles/datastar.js').then(({ attribute, mergePatch }) => {
+    // Shared per-scroll-root state for track-top (one observer + a registry of
+    // each observed entry's top/bottom), so a single deterministic winner can
+    // be chosen per batch instead of letting the last observer to fire win.
+    const trackTopState = new WeakMap();
     attribute({
       name: 'on-intersect-line',
       requirement: { key: 'denied', value: 'must' },
       apply({ el, rx }) {
         const scrollRoot = el.closest('[data-testid="entry-list"]')?.parentElement
           ?? document.body;
-        let first = true;
+        let initialized = false;
+        let intersecting = false;
         const observer = new IntersectionObserver((entries) => {
-          // IntersectionObserver reports initial state on observe(); ignore that
-          // mount report so a freshly-patched row sitting on the line doesn't
-          // immediately auto-read. Fire only on real later crossings.
-          if (first) { first = false; return; }
           for (const entry of entries) {
-            if (entry.isIntersecting) rx();
+            if (!initialized) {
+              // IntersectionObserver reports initial state on observe(); record
+              // it so the top-of-list entry (already in/above the band) is caught
+              // by the first-scroll hook below, but don't fire yet — a freshly
+              // patched row sitting on the line shouldn't auto-read immediately.
+              initialized = true;
+              intersecting = entry.isIntersecting;
+              continue;
+            }
+            if (entry.isIntersecting) {
+              intersecting = true;
+              rx();
+            } else {
+              intersecting = false;
+            }
           }
         }, {
           root: scrollRoot,
@@ -130,13 +72,25 @@ document.addEventListener('datastar-ready', () => {
           threshold: 0,
         });
         observer.observe(el);
-        return () => observer.disconnect();
+        // The first entry's top sits above the line at load, so it never
+        // produces a positive "entering the band" crossing in the scroll-down
+        // direction. Catch it once on the first scroll while it still
+        // intersects the band. Guard the signal so the read isn't dropped if
+        // this listener runs before datastar's own data-on:scroll handler.
+        const onScroll = () => {
+          if (initialized && intersecting) {
+            mergePatch({ userHasScrolled: true });
+            rx();
+          }
+          scrollRoot.removeEventListener('scroll', onScroll);
+        };
+        scrollRoot.addEventListener('scroll', onScroll, { passive: true });
+        return () => {
+          observer.disconnect();
+          scrollRoot.removeEventListener('scroll', onScroll);
+        };
       },
     });
-  });
-});
-document.addEventListener('datastar-ready', () => {
-  import('https://cdn.jsdelivr.net/gh/starfederation/datastar@v1.0.2/bundles/datastar.js').then(({ attribute }) => {
     // Sentinel scroll observer: fires on EVERY intersection including the
     // initial mount report, so an under-filled viewport immediately fetches
     // more pages. Uses a generous rootMargin so it fires before the sentinel
@@ -158,6 +112,56 @@ document.addEventListener('datastar-ready', () => {
         });
         observer.observe(el);
         return () => observer.disconnect();
+      },
+    });
+    // $currentId ground truth: which entry's top sits at (or just above) the
+    // top of the scroll container. A thin band at the top of the container;
+    // the entry intersecting it owns $currentId. Only writes the signal on a
+    // real change; never reads the DOM on demand.
+    //
+    // One shared IntersectionObserver per scroll root observes every
+    // [data-track-top] entry. On each batch it records each entry's top/bottom
+    // (relative to the container top, so a partially-scrolled-out entry has a
+    // negative top) and picks a single deterministic winner — the topmost
+    // still-visible entry — instead of letting whichever observer fires last
+    // win. This handles tall expanded entries (no threshold dead-zone) and
+    // avoids flickering between two entries during a handoff.
+    attribute({
+      name: 'track-top',
+      requirement: { key: 'denied', value: 'must' },
+      apply({ el }) {
+        const scrollRoot = el.closest('[data-testid="entry-list"]')?.parentElement
+          ?? document.body;
+        if (!trackTopState.has(scrollRoot)) {
+          const registry = new Map();
+          const observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+              if (!entry.rootBounds) continue;
+              const top = entry.boundingClientRect.top - entry.rootBounds.top;
+              const bottom = entry.boundingClientRect.bottom - entry.rootBounds.top;
+              registry.set(entry.target.getAttribute('data-track-top'), { top, bottom });
+            }
+            let best = null;
+            let bestTop = Infinity;
+            for (const [entryId, r] of registry) {
+              if (r.bottom <= 0) continue;
+              if (r.top < bestTop) { bestTop = r.top; best = entryId; }
+            }
+            if (best != null) mergePatch({ currentId: Number(best) });
+          }, {
+            root: scrollRoot,
+            // Only the sliver at the very top of the container triggers.
+            rootMargin: '0px 0px -95% 0px',
+            threshold: 0,
+          });
+          trackTopState.set(scrollRoot, { observer, registry });
+        }
+        const s = trackTopState.get(scrollRoot);
+        s.observer.observe(el);
+        return () => {
+          s.registry.delete(el.getAttribute('data-track-top'));
+          s.observer.unobserve(el);
+        };
       },
     });
   });

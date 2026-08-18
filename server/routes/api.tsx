@@ -11,8 +11,20 @@ import EntryItem from '../components/EntryItem'
 import FeedPanel from '../components/FeedPanel'
 import { zodEntriesFilter } from '../lib/types'
 import type { EntriesFilter, MinifluxEntry } from '../lib/types'
+import { readSession } from '../lib/auth'
+import { saveUserPrefs, saveFeedPrefs } from '../lib/prefs'
 
 const zodViewMode = z.enum(['expanded', 'list'])
+
+/** Datastar's expression engine stringifies booleans assigned at a nested
+ *  object path (e.g. `$collapsedCats[id] = !$collapsedCats[id]` lands as the
+ *  string "true"/"false"). Every `@put` echoes the full signal body, so the
+ *  pref endpoints receive `collapsedCats` as strings; coerce them to booleans
+ *  so a malformed value can't 500 an otherwise-unrelated toggle. */
+const coerceBool = (v: unknown): boolean => {
+  if (typeof v === 'boolean') return v
+  return v === 'true' || v === '1'
+}
 
 const zodSignals = z.object({
   filter: zodEntriesFilter.default({ status: 'unread' }),
@@ -20,6 +32,12 @@ const zodSignals = z.object({
   keepUnreadIds: z.array(z.number()).optional(),
   entryIds: z.array(z.number()).optional(),
   hideReadItems: z.boolean().optional(),
+  hideEmptyFeeds: z.boolean().optional(),
+  disabledAutoReadFeeds: z.array(z.number()).optional(),
+  collapsedCats: z
+    .record(z.string(), z.union([z.boolean(), z.string()]).transform(coerceBool))
+    .optional(),
+  renameTitle: z.string().optional(),
   nextCursor: z.string().nullable().optional(),
   hasMore: z.boolean().optional(),
 })
@@ -46,9 +64,7 @@ async function parseBodySignals(ctx: { req: { json: () => Promise<unknown> } }) 
  */
 async function refreshFeedPanel(
   generator: ServerSentEventGenerator,
-  viewMode: 'expanded' | 'list' = 'expanded',
   filter?: { feedId?: number | string; categoryId?: number | string; starred?: boolean; sort?: 'oldest' | 'newest' },
-  hideReadItems = true,
 ): Promise<void> {
   const [feeds, categories, counters] = await Promise.all([
     miniflux.getFeeds(),
@@ -61,9 +77,6 @@ async function refreshFeedPanel(
         categories={categories}
         feeds={feeds}
         counters={counters.unreads}
-        viewMode={viewMode}
-        hideReadItems={hideReadItems}
-        sort={filter?.sort}
       />,
     ),
     { selector: '[data-testid="feed-panel"]', mode: 'outer' },
@@ -74,6 +87,35 @@ async function refreshFeedPanel(
       JSON.stringify({ unreadCount: computeUnreadCount(filter, feeds, counters.unreads) }),
     )
   }
+}
+
+/**
+ * Re-fetch page 1 under the current filter and re-render the entry list.
+ * Used by the view/sort/hide-read-items toggles — a view change is a full
+ * list replacement (fresh pagination), exactly like mark-all-read.
+ */
+async function reRenderEntries(
+  body: {
+    filter?: EntriesFilter
+    viewMode?: 'expanded' | 'list'
+    hideReadItems?: boolean
+  },
+) {
+  const filter: EntriesFilter = { ...(body.filter ?? { status: 'unread' }) }
+  filter.hideReadItems = body.hideReadItems ?? true
+  const page = await miniflux.getEntriesPage(filter)
+  return ServerSentEventGenerator.stream(async (generator) => {
+    generator.patchElements(
+      await renderToString(<EntryList entries={page.entries} viewMode={body.viewMode ?? 'expanded'} />),
+      { selector: '[data-testid="entry-list"]', mode: 'inner' },
+    )
+    generator.patchSignals(JSON.stringify({
+      nextCursor: page.nextCursor ?? null,
+      hasMore: page.hasMore,
+      entryIds: page.entries.map((e) => e.id),
+      currentId: page.entries[0]?.id ?? 0,
+    }))
+  })
 }
 
 export const apiRoutes = new Hono()
@@ -90,6 +132,7 @@ export const apiRoutes = new Hono()
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
         entryIds: page.entries.map((e) => e.id),
+        currentId: page.entries[0]?.id ?? 0,
       }))
     })
   })
@@ -132,7 +175,7 @@ export const apiRoutes = new Hono()
         ),
         { selector: `#entry-${id}`, mode: 'outer' },
       )
-      await refreshFeedPanel(generator, body.viewMode ?? 'expanded', body.filter, body.hideReadItems ?? true)
+      await refreshFeedPanel(generator, body.filter)
     })
   })
   .post('/api/entries/:id/star', async (ctx) => {
@@ -163,7 +206,7 @@ export const apiRoutes = new Hono()
         ),
         { selector: `#entry-${id}`, mode: 'outer' },
       )
-      await refreshFeedPanel(generator, body.viewMode ?? 'expanded', body.filter, body.hideReadItems ?? true)
+      await refreshFeedPanel(generator, body.filter)
     })
   })
   .put('/api/mark-all-read', async (ctx) => {
@@ -187,8 +230,8 @@ export const apiRoutes = new Hono()
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
         entryIds: page.entries.map((e) => e.id),
+        currentId: page.entries[0]?.id ?? 0,
       }))
-      await refreshFeedPanel(generator, body.viewMode ?? 'expanded', body.filter, body.hideReadItems ?? true)
     })
   })
   .put('/api/refresh', async (ctx) => {
@@ -209,9 +252,6 @@ export const apiRoutes = new Hono()
             categories={categories}
             feeds={feeds}
             counters={counters.unreads}
-            viewMode={body.viewMode ?? 'expanded'}
-            hideReadItems={body.hideReadItems ?? true}
-            sort={body.filter?.sort}
           />,
         ),
         { selector: '[data-testid="feed-panel"]', mode: 'outer' },
@@ -224,6 +264,7 @@ export const apiRoutes = new Hono()
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
         entryIds: page.entries.map((e) => e.id),
+        currentId: page.entries[0]?.id ?? 0,
       }))
     })
   })
@@ -239,27 +280,87 @@ export const apiRoutes = new Hono()
     }
     return ctx.redirect('/')
   })
-  .post('/api/categories/:id/rename', async (ctx) => {
-    const categoryId = Number(ctx.req.param('id'))
-    const url = new URL(ctx.req.url)
-    const body = (await ctx.req.parseBody().catch(() => ({}))) as Record<string, unknown>
-    const title = (typeof body.title === 'string' && body.title.trim()
-      ? body.title
-      : url.searchParams.get('title') ?? '').trim()
-    if (!title) return ctx.redirect('/')
-    await miniflux.updateCategory(categoryId, title)
-    return ctx.redirect('/')
+
+  // ---- Per-account preferences (SQLite, keyed by Miniflux user id) ----
+  // Each action is a plain @put: the client toggles the signal, datastar
+  // sends all signals implicitly, and the server persists the relevant one.
+  // View/sort/hideReadItems are per-feed; the rest are account-wide.
+  .put('/api/prefs/view-mode', async (ctx) => {
+    const body = await parseBodySignals(ctx)
+    const { userId } = readSession(ctx) ?? {}
+    const feedId = Number(body.filter?.feedId)
+    if (userId != null && Number.isInteger(feedId) && feedId > 0) {
+      saveFeedPrefs(userId, feedId, { viewMode: body.viewMode ?? 'expanded' })
+    }
+    return reRenderEntries(body)
   })
-  .post('/api/feeds/:id/rename', async (ctx) => {
+  .put('/api/prefs/sort', async (ctx) => {
+    const body = await parseBodySignals(ctx)
+    const { userId } = readSession(ctx) ?? {}
+    const feedId = Number(body.filter?.feedId)
+    if (userId != null && Number.isInteger(feedId) && feedId > 0) {
+      saveFeedPrefs(userId, feedId, { sort: body.filter?.sort ?? 'oldest' })
+    }
+    return reRenderEntries(body)
+  })
+  .put('/api/prefs/hide-read-items', async (ctx) => {
+    const body = await parseBodySignals(ctx)
+    const { userId } = readSession(ctx) ?? {}
+    const feedId = Number(body.filter?.feedId)
+    if (userId != null && Number.isInteger(feedId) && feedId > 0) {
+      saveFeedPrefs(userId, feedId, { hideReadItems: body.hideReadItems ?? true })
+    }
+    return reRenderEntries(body)
+  })
+  .put('/api/prefs/hide-empty-feeds', async (ctx) => {
+    const body = await parseBodySignals(ctx)
+    const { userId } = readSession(ctx) ?? {}
+    if (userId != null && typeof body.hideEmptyFeeds === 'boolean') {
+      saveUserPrefs(userId, { hideEmptyFeeds: body.hideEmptyFeeds })
+    }
+    return ServerSentEventGenerator.stream(async (generator) => {
+      await refreshFeedPanel(generator, body.filter)
+    })
+  })
+  .put('/api/prefs/collapsed-cats', async (ctx) => {
+    const body = await parseBodySignals(ctx)
+    const { userId } = readSession(ctx) ?? {}
+    if (userId != null && body.collapsedCats) {
+      saveUserPrefs(userId, { collapsedCats: body.collapsedCats })
+    }
+    return ctx.body(null, 204)
+  })
+  .put('/api/prefs/auto-read', async (ctx) => {
+    const body = await parseBodySignals(ctx)
+    const { userId } = readSession(ctx) ?? {}
+    if (userId != null && Array.isArray(body.disabledAutoReadFeeds)) {
+      saveUserPrefs(userId, { disabledAutoReadFeeds: body.disabledAutoReadFeeds })
+    }
+    return ctx.body(null, 204)
+  })
+
+  // ---- Inline rename (SSE; no redirect, no reload) ----
+  .put('/api/categories/:id/rename', async (ctx) => {
+    const categoryId = Number(ctx.req.param('id'))
+    const body = await parseBodySignals(ctx)
+    const title = (body.renameTitle ?? '').trim()
+    if (!title) return ctx.json({ error: 'title required' }, 400)
+    await miniflux.updateCategory(categoryId, title)
+    return ServerSentEventGenerator.stream(async (generator) => {
+      await refreshFeedPanel(generator, body.filter)
+      generator.patchSignals(JSON.stringify({ renameId: null, renameKind: null, renameTitle: '' }))
+    })
+  })
+  .put('/api/feeds/:id/rename', async (ctx) => {
     const feedId = Number(ctx.req.param('id'))
-    const url = new URL(ctx.req.url)
-    const body = (await ctx.req.parseBody().catch(() => ({}))) as Record<string, unknown>
-    const title = (typeof body.title === 'string' && body.title.trim()
-      ? body.title
-      : url.searchParams.get('title') ?? '').trim()
-    if (!title) return ctx.redirect('/')
+    const body = await parseBodySignals(ctx)
+    const title = (body.renameTitle ?? '').trim()
+    if (!title) return ctx.json({ error: 'title required' }, 400)
     await miniflux.updateFeed(feedId, title)
-    return ctx.redirect('/')
+    return ServerSentEventGenerator.stream(async (generator) => {
+      await refreshFeedPanel(generator, body.filter)
+      generator.patchSignals(JSON.stringify({ renameId: null, renameKind: null, renameTitle: '' }))
+    })
   })
   .get(
     '/api/feeds/:id/icon',
