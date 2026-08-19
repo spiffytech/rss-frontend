@@ -52,15 +52,15 @@ const FeedRow: FC<{ feed: MinifluxFeed; unread: number; href: string }> = ({
         <span data-show={`!($renameId === ${feed.id} && $renameKind === 'feed')`}>{feed.title}</span>
       </span>
     </a>
-    <span class="inline-flex items-center gap-1" data-show={`$renameId === ${feed.id} && $renameKind === 'feed'`}>
+    <span class="inline-flex flex-1 min-w-0 items-center gap-1" data-show={`$renameId === ${feed.id} && $renameKind === 'feed'`}>
       <input
         type="text"
-        class="w-24 p-0.5 border border-gray-300 rounded text-sm"
+        class="flex-1 min-w-0 p-0.5 border border-gray-300 rounded text-sm"
         data-bind="renameTitle"
-        data-on:keydown="if(evt.key === 'Enter'){ @put('/api/feeds/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
+        data-on:keydown="if(evt.key === 'Enter'){ @put('/api/feeds/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = ''; $renameKind = ''; $renameTitle = ''; }"
       />
-      <button type="button" class="text-xs" data-on:click={`@put('/api/feeds/${feed.id}/rename')`}>Save</button>
-      <button type="button" class="text-xs" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
+      <button type="button" class="text-xs shrink-0" data-on:click={`@put('/api/feeds/${feed.id}/rename')`}>Save</button>
+      <button type="button" class="text-xs shrink-0" data-on:click={`$renameId = ''; $renameKind = ''; $renameTitle = ''`}>Cancel</button>
     </span>
     <span class="relative w-[2.5ch] shrink-0 text-right">
       <span class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0">{unread}</span>
@@ -166,15 +166,15 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters }) => {
                     <span data-text={`$collapsedCats[${cat.id}] ? '▸' : '▾'`}></span>
                     <span class="truncate" data-show={`!($renameId === ${cat.id} && $renameKind === 'category')`}>{cat.title}</span>
                   </button>
-                  <span class="inline-flex items-center gap-1 min-w-0" data-show={`$renameId === ${cat.id} && $renameKind === 'category'`}>
+                  <span class="inline-flex flex-1 min-w-0 items-center gap-1" data-show={`$renameId === ${cat.id} && $renameKind === 'category'`}>
                     <input
                       type="text"
-                      class="w-24 p-0.5 border border-gray-300 rounded text-sm font-normal"
+                      class="flex-1 min-w-0 p-0.5 border border-gray-300 rounded text-sm font-normal"
                       data-bind="renameTitle"
-                      data-on:keydown="if(evt.key === 'Enter'){ @put('/api/categories/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
+                      data-on:keydown="if(evt.key === 'Enter'){ @put('/api/categories/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = ''; $renameKind = ''; $renameTitle = ''; }"
                     />
-                    <button type="button" class="text-xs font-normal" data-on:click={`@put('/api/categories/${cat.id}/rename')`}>Save</button>
-                    <button type="button" class="text-xs font-normal" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
+                    <button type="button" class="text-xs font-normal shrink-0" data-on:click={`@put('/api/categories/${cat.id}/rename')`}>Save</button>
+                    <button type="button" class="text-xs font-normal shrink-0" data-on:click={`$renameId = ''; $renameKind = ''; $renameTitle = ''`}>Cancel</button>
                   </span>
                   <span class="relative w-[2.5ch] shrink-0 text-right">
                     <span class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0">{cat.total_unread}</span>
