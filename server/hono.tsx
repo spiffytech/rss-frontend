@@ -43,6 +43,12 @@ const PUBLIC_PATHS = new Set([
   // and ad-hoc links resolve even after switching to hashed URLs.
   '/style.css',
   '/favicon.svg',
+  '/manifest.webmanifest',
+  '/sw.js',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon-maskable-512.png',
+  '/apple-touch-icon.png',
 ])
 
 /**
@@ -66,6 +72,8 @@ app.use('/*', async (ctx, next) => {
     }
     return ctx.redirect('/login')
   }
+
+  writeSession(ctx, session)
 
   // Set the per-request Miniflux credential and run the route inside it.
   return minifluxContext.run({ token: session.token }, () => next())

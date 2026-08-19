@@ -6,6 +6,8 @@ import { loadConfig } from './config'
 
 const COOKIE_NAME = 'mf_session'
 
+const SESSION_MAX_AGE = 30 * 24 * 60 * 60
+
 export interface Session {
   /** Miniflux API key minted for this session (valid until logout). */
   token: string
@@ -63,10 +65,10 @@ export function readSession(ctx: Context): Session | null {
 export function writeSession(ctx: Context, session: Session): void {
   setCookie(ctx, COOKIE_NAME, sign(JSON.stringify(session)), {
     httpOnly: true,
-    sameSite: 'Lax',
+    sameSite: 'Strict',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
-    // Session cookie by default (no expires) — dies with the browser tab.
+    maxAge: SESSION_MAX_AGE,
   })
 }
 
@@ -74,7 +76,7 @@ export function writeSession(ctx: Context, session: Session): void {
 export function clearSession(ctx: Context): void {
   setCookie(ctx, COOKIE_NAME, '', {
     httpOnly: true,
-    sameSite: 'Lax',
+    sameSite: 'Strict',
     secure: process.env.NODE_ENV === 'production',
     path: '/',
     maxAge: 0,

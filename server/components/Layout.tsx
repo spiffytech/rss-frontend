@@ -14,6 +14,9 @@ const Layout: FC<PropsWithChildren<LayoutProps>> = ({ title = 'Miniflux Reader',
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title}</title>
         <link rel="icon" href="/favicon.svg" />
+        <link rel="manifest" href="/manifest.webmanifest" />
+        <meta name="theme-color" content="#0e7490" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
         <link rel="stylesheet" href={cssAsset} />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
@@ -208,6 +211,7 @@ document.addEventListener('DOMContentLoaded', () => {
         />
       </head>
       <body class="h-dvh flex flex-col bg-white text-gray-900">
+        <script dangerouslySetInnerHTML={{ __html: `navigator.serviceWorker?.register('/sw.js')` }} />
         <noscript>You need to enable JavaScript to run this app.</noscript>
         <div class="mx-2 flex-1 min-h-0 flex flex-col">{children}</div>
       </body>
