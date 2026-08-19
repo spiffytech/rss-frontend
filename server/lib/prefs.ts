@@ -35,6 +35,7 @@ function getDb(): Database {
     // dev); Docker's Dockerfile pre-creates /data, but local runs do not.
     mkdirSync(dirname(loadConfig().prefsDbPath), { recursive: true })
     db = new Database(loadConfig().prefsDbPath, { create: true })
+    applyPragmas(db)
     db.exec(`
       CREATE TABLE IF NOT EXISTS user_prefs (
         user_id INTEGER NOT NULL,
@@ -45,6 +46,22 @@ function getDb(): Database {
     `)
   }
   return db
+}
+
+function applyPragmas(db: Database): void {
+  for (const [pragma, value] of [
+    ['journal_mode', 'WAL'],
+    ['synchronous', 'NORMAL'],
+    ['foreign_keys', 'ON'],
+    ['temp_store', 'MEMORY'],
+    ['cache_size', '-64000'],
+    ['mmap_size', '536870912'],
+    ['page_size', '32768'],
+    ['busy_timeout', '5000'],
+    ['wal_autocheckpoint', '10000'],
+  ] as const) {
+    db.run(`PRAGMA ${pragma} = ${value};`)
+  }
 }
 
 function readScope(userId: number, scope: string): Record<string, unknown> {

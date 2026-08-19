@@ -10,7 +10,7 @@
 @theme {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
     'Helvetica Neue', 'Noto Sans', Arial, sans-serif;
-  --font-serif: 'Source Serif 4', ui-serif, Georgia, 'Times New Roman', serif;
+  --font-serif: 'Lora', ui-serif, Georgia, 'Times New Roman', serif;
 
   --color-accent: oklch(52% 0.105 223.128); /* cyan-700 */
   --color-surface: oklch(98.5% 0.002 247.839); /* gray-50 */
@@ -27,9 +27,9 @@
 /* Reading body: serif, comfortable measure (~66ch), slightly larger than UI. */
 .reading {
   font-family: var(--font-serif);
-  font-size: 1.0625rem;
-  line-height: 1.65;
+  line-height: 1.7;
   max-width: 42rem; /* ~66ch at this size */
+  overflow-wrap: break-word;
   color: oklch(28% 0.02 264);
 }
 .reading p { margin: 0 0 1em; }

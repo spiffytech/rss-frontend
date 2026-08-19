@@ -20,8 +20,9 @@ const EntryItem: FC<EntryItemProps> = ({ entry, viewMode }) => {
       id={`entry-${id}`}
       data-entry-id={id}
       data-track-top={id}
-      class={`msgFrame px-2 py-2 ${unread ? 'bg-white' : 'bg-gray-50 text-gray-500'}`}
-      data-class={`{ 'ring-1 ring-cyan-500/60': $currentId === ${id} }`}
+      class={`msgFrame px-3 py-2.5 border-b border-gray-200 ${
+        unread ? 'bg-white' : 'bg-gray-50'
+      }`}
       {...{
         'data-on-intersect-line':
           unread && isExpandedView
@@ -57,23 +58,25 @@ const EntryItem: FC<EntryItemProps> = ({ entry, viewMode }) => {
         </button>
       </div>
 
-      <div class="msgBody mt-0.5">
+      <div class="msgBody mt-1">
         <a
-          class={`msubject block font-medium hover:underline ${unread ? 'text-gray-900' : ''} py-1 -my-1`}
+          class={`msubject block leading-snug font-semibold hover:underline text-lg break-words ${
+            unread ? 'text-gray-900' : 'text-gray-500'
+          }`}
           href={entry.url}
           target="_blank"
           rel="noreferrer"
         >
           {entry.title || '(untitled)'}
         </a>
-        <div class="text-xs text-gray-500">
-          from <span class="text-gray-700">{entry.feed?.title ?? ''}</span>
+        <div class={`text-xs mt-1 ${unread ? 'text-gray-500' : 'text-gray-400'}`}>
+          from <span class={unread ? 'text-gray-700' : 'text-gray-500'}>{entry.feed?.title ?? ''}</span>
           {entry.author && entry.author !== entry.feed?.title ? ` · ${entry.author}` : ''}
         </div>
 
         {showContent && (
           <div
-            class="reading mt-1"
+            class="reading text-base mt-4"
             dangerouslySetInnerHTML={{ __html: lazyHtml(entry.content) }}
           />
         )}
