@@ -9,7 +9,7 @@ interface EntryListProps {
 }
 
 const EntryList: FC<EntryListProps> = ({ entries, viewMode }) => (
-  <div data-testid="entry-list" class="flex flex-col gap-y-1 pb-[60vh]">
+  <div data-testid="entry-list" class="flex flex-col gap-y-1 pb-[100dvh]">
     {entries.length === 0 ? (
       <p class="text-gray-500 text-sm px-2 py-4">No entries.</p>
     ) : (
@@ -18,9 +18,9 @@ const EntryList: FC<EntryListProps> = ({ entries, viewMode }) => (
       ))
     )}
     {/* Infinite-scroll sentinel: datastar's on-intersect-line plugin fires
-        the GET when it scrolls into view. The 60vh bottom padding on the
-        list container ensures items near the end can cross the auto-read
-        detection line before the scroll container hits its floor. */}
+        the GET when it scrolls into view. The 100dvh bottom padding on the
+        list container ensures the last item can scroll all the way to the
+        top of the scroll container. */}
     <div
       id="entry-sentinel"
       class="h-1 w-full"
