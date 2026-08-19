@@ -42,26 +42,10 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters }) => {
   }
   const uncategorized = feedsByCategory.get(0) ?? []
 
-  // Folders (categories) sorted alphabetically, case-insensitive. Miniflux
-  // returns them in creation order, which reads as random in the sidebar.
-  // Some names carry an import-order prefix ("1. Comics", "2.1 Org Blogs",
-  // "5. Jacksfilms") that would otherwise dominate sorting; strip the
-  // numeric prefix for the compare and use the original title as a tiebreak
-  // when stripped names collide.
-  const catName = (t: string): string => {
-    // Strip import-order prefixes: "1. Comics" → "Comics",
-    // "2.1 Org Blogs" → "Org Blogs". Try dot+space first, then space-only.
-    let s = t.replace(/^\d+(?:\.\d+)*\.\s+/, '')
-    if (s === t) s = t.replace(/^\d+(?:\.\d+)*\s+/, '')
-    return s
-  }
-  const sortedCategories = [...categories].sort((a, b) => {
-    const na = catName(a.title)
-    const nb = catName(b.title)
-    const cmp = na.localeCompare(nb, undefined, { sensitivity: 'base' })
-    if (cmp !== 0) return cmp
-    return a.title.localeCompare(b.title, undefined, { numeric: true })
-  })
+  // Folders (categories) sorted alphabetically, case-insensitive.
+  const sortedCategories = [...categories].sort((a, b) =>
+    a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }),
+  )
 
   const totalUnread = Object.values(counters).reduce((a, b) => a + b, 0)
 
