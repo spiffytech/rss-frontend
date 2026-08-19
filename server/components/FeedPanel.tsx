@@ -32,6 +32,50 @@ const FeedIcon: FC<{ feedId: number; title: string }> = ({ feedId, title }) => (
   </span>
 )
 
+/** A single feed row. The `<a>` navigation link contains no nested buttons;
+ *  the rename Save/Cancel and the ✎ trigger are siblings so the markup stays
+ *  valid (nested interactive elements in a `<button>`/`<a>` were breaking out
+ *  of their `data-show` container). */
+const FeedRow: FC<{ feed: MinifluxFeed; unread: number; href: string }> = ({
+  feed,
+  unread,
+  href,
+}) => (
+  <li class="group flex items-center gap-x-2 text-sm" data-show={`${unread} > 0 || !$hideEmptyFeeds`}>
+    <a
+      href={href}
+      class="flex-1 min-w-0 flex items-center gap-x-2 px-2 py-2 rounded hover:bg-gray-100"
+      data-class:bg-gray-100={`$filter.feedId === ${feed.id}`}
+    >
+      <FeedIcon feedId={feed.id} title={feed.title} />
+      <span class="flex-1 truncate">
+        <span data-show={`!($renameId === ${feed.id} && $renameKind === 'feed')`}>{feed.title}</span>
+      </span>
+    </a>
+    <span class="inline-flex items-center gap-1" data-show={`$renameId === ${feed.id} && $renameKind === 'feed'`}>
+      <input
+        type="text"
+        class="w-24 p-0.5 border border-gray-300 rounded text-sm"
+        data-bind="renameTitle"
+        data-on:keydown="if(evt.key === 'Enter'){ @put('/api/feeds/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
+      />
+      <button type="button" class="text-xs" data-on:click={`@put('/api/feeds/${feed.id}/rename')`}>Save</button>
+      <button type="button" class="text-xs" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
+    </span>
+    <span class="relative w-[2.5ch] shrink-0 text-right">
+      <span class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0">{unread}</span>
+      <button
+        type="button"
+        title="Rename feed"
+        class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
+        data-on:click__stop={`$renameId = ${feed.id}; $renameKind = 'feed'; $renameTitle = ${JSON.stringify(feed.title)}`}
+      >
+        ✎
+      </button>
+    </span>
+  </li>
+)
+
 const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters }) => {
   const feedsByCategory = new Map<number, MinifluxFeed[]>()
   for (const feed of feeds) {
@@ -93,19 +137,36 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters }) => {
 
       <div>
         <div class="font-semibold text-sm mb-1">Feeds</div>
-        {sortedCategories.map((cat) => {
-          const catFeeds = feedsByCategory.get(cat.id) ?? []
-          return (
-            <div class="mb-1" key={cat.id}>
-              <button
-                type="button"
-                class="group w-full text-left px-2 py-2 rounded hover:bg-gray-100 flex items-center gap-x-2 text-sm font-semibold"
-                data-on:click={`$collapsedCats[${cat.id}] = !$collapsedCats[${cat.id}]; @put('/api/prefs/collapsed-cats')`}
-              >
-                <span class="flex-1 truncate">
-                  <span data-text={`$collapsedCats[${cat.id}] ? '▸' : '▾'`}></span>{' '}
-                  <span data-show={`!($renameId === ${cat.id} && $renameKind === 'category')`}>{cat.title}</span>
-                  <span class="inline-flex items-center gap-1" data-show={`$renameId === ${cat.id} && $renameKind === 'category'`}>
+
+        {uncategorized.length > 0 && (
+          <ul>
+            {uncategorized.map((feed) => (
+              <FeedRow
+                key={feed.id}
+                feed={feed}
+                unread={counters[feed.id] ?? 0}
+                href={link({ feed: feed.id })}
+              />
+            ))}
+          </ul>
+        )}
+
+        <ul>
+          {sortedCategories.map((cat) => {
+            const catFeeds = feedsByCategory.get(cat.id) ?? []
+            return (
+              <li key={cat.id}>
+                <div class="group flex items-center gap-x-2 text-sm font-semibold">
+                  <button
+                    type="button"
+                    class="flex-1 min-w-0 text-left px-2 py-2 rounded hover:bg-gray-100 flex items-center gap-x-2"
+                    data-on:click={`$collapsedCats[${cat.id}] = !$collapsedCats[${cat.id}]; @put('/api/prefs/collapsed-cats')`}
+                    data-attr:aria-expanded={`!$collapsedCats[${cat.id}]`}
+                  >
+                    <span data-text={`$collapsedCats[${cat.id}] ? '▸' : '▾'`}></span>
+                    <span class="truncate" data-show={`!($renameId === ${cat.id} && $renameKind === 'category')`}>{cat.title}</span>
+                  </button>
+                  <span class="inline-flex items-center gap-1 min-w-0" data-show={`$renameId === ${cat.id} && $renameKind === 'category'`}>
                     <input
                       type="text"
                       class="w-24 p-0.5 border border-gray-300 rounded text-sm font-normal"
@@ -115,106 +176,32 @@ const FeedPanel: FC<FeedPanelProps> = ({ categories, feeds, counters }) => {
                     <button type="button" class="text-xs font-normal" data-on:click={`@put('/api/categories/${cat.id}/rename')`}>Save</button>
                     <button type="button" class="text-xs font-normal" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
                   </span>
-                </span>
-                <span class="ml-auto relative w-[2.5ch] shrink-0 text-right">
-                  <span class="text-xs text-gray-500 group-hover:opacity-0">{cat.total_unread}</span>
-                  <button
-                    type="button"
-                    title="Rename folder"
-                    class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
-                    data-on:click__stop={`$renameId = ${cat.id}; $renameKind = 'category'; $renameTitle = ${JSON.stringify(cat.title)}`}
-                  >
-                    ✎
-                  </button>
-                </span>
-              </button>
-              <ul class="ml-3" data-show={`!$collapsedCats[${cat.id}]`}>
-                {catFeeds.map((feed) => (
-                  <li
-                    key={feed.id}
-                    class="group"
-                    data-show={`${counters[feed.id] ?? 0} > 0 || !$hideEmptyFeeds`}
-                  >
-                    <a
-                      href={link({ feed: feed.id })}
-                      class="w-full text-left px-2 py-2 rounded hover:bg-gray-100 flex items-center gap-x-2 text-sm"
-                      data-class:bg-gray-100={`$filter.feedId === ${feed.id}`}
+                  <span class="relative w-[2.5ch] shrink-0 text-right">
+                    <span class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0">{cat.total_unread}</span>
+                    <button
+                      type="button"
+                      title="Rename folder"
+        class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
+                      data-on:click__stop={`$renameId = ${cat.id}; $renameKind = 'category'; $renameTitle = ${JSON.stringify(cat.title)}`}
                     >
-                      <FeedIcon feedId={feed.id} title={feed.title} />
-                      <span class="flex-1 truncate">
-                        <span data-show={`!($renameId === ${feed.id} && $renameKind === 'feed')`}>{feed.title}</span>
-                        <span class="inline-flex items-center gap-1" data-show={`$renameId === ${feed.id} && $renameKind === 'feed'`}>
-                          <input
-                            type="text"
-                            class="w-24 p-0.5 border border-gray-300 rounded text-sm"
-                            data-bind="renameTitle"
-                            data-on:keydown="if(evt.key === 'Enter'){ @put('/api/feeds/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
-                          />
-                          <button type="button" class="text-xs" data-on:click={`@put('/api/feeds/${feed.id}/rename')`}>Save</button>
-                          <button type="button" class="text-xs" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
-                        </span>
-                      </span>
-                      <span class="ml-auto relative w-[2.5ch] shrink-0 text-right">
-                        <span class="text-xs text-gray-500 group-hover:opacity-0">{counters[feed.id] ?? 0}</span>
-                        <button
-                          type="button"
-                          title="Rename feed"
-                          class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
-                          data-on:click__stop={`$renameId = ${feed.id}; $renameKind = 'feed'; $renameTitle = ${JSON.stringify(feed.title)}`}
-                        >
-                          ✎
-                        </button>
-                      </span>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )
-        })}
-        {uncategorized.length > 0 && (
-          <ul class="ml-3">
-            {uncategorized.map((feed) => (
-              <li
-                key={feed.id}
-                class="group"
-                data-show={`${counters[feed.id] ?? 0} > 0 || !$hideEmptyFeeds`}
-              >
-                <a
-                  href={link({ feed: feed.id })}
-                  class="w-full text-left px-2 py-2 rounded hover:bg-gray-100 flex items-center gap-x-2 text-sm"
-                  data-class:bg-gray-100={`$filter.feedId === ${feed.id}`}
-                >
-                  <FeedIcon feedId={feed.id} title={feed.title} />
-                  <span class="flex-1 truncate">
-                        <span data-show={`!($renameId === ${feed.id} && $renameKind === 'feed')`}>{feed.title}</span>
-                        <span class="inline-flex items-center gap-1" data-show={`$renameId === ${feed.id} && $renameKind === 'feed'`}>
-                          <input
-                            type="text"
-                            class="w-24 p-0.5 border border-gray-300 rounded text-sm"
-                            data-bind="renameTitle"
-                            data-on:keydown="if(evt.key === 'Enter'){ @put('/api/feeds/' + $renameId + '/rename') } else if(evt.key === 'Escape'){ $renameId = null; $renameKind = null; $renameTitle = ''; }"
-                          />
-                          <button type="button" class="text-xs" data-on:click={`@put('/api/feeds/${feed.id}/rename')`}>Save</button>
-                          <button type="button" class="text-xs" data-on:click={`$renameId = null; $renameKind = null; $renameTitle = ''`}>Cancel</button>
-                        </span>
-                      </span>
-                      <span class="ml-auto relative w-[2.5ch] shrink-0 text-right">
-                        <span class="text-xs text-gray-500 group-hover:opacity-0">{counters[feed.id] ?? 0}</span>
-                        <button
-                          type="button"
-                          title="Rename feed"
-                          class="absolute inset-y-0 right-0 text-xs text-gray-500 opacity-0 group-hover:opacity-100 hover:text-gray-900 px-0.5 cursor-pointer"
-                          data-on:click__stop={`$renameId = ${feed.id}; $renameKind = 'feed'; $renameTitle = ${JSON.stringify(feed.title)}`}
-                        >
-                          ✎
-                        </button>
-                      </span>
-                </a>
+                      ✎
+                    </button>
+                  </span>
+                </div>
+                <ul class="ml-3" data-show={`!$collapsedCats[${cat.id}]`}>
+                  {catFeeds.map((feed) => (
+                    <FeedRow
+                      key={feed.id}
+                      feed={feed}
+                      unread={counters[feed.id] ?? 0}
+                      href={link({ feed: feed.id })}
+                    />
+                  ))}
+                </ul>
               </li>
-            ))}
-          </ul>
-        )}
+            )
+          })}
+        </ul>
       </div>
     </aside>
   )
