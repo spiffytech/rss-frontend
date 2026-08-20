@@ -113,7 +113,7 @@ async function reRenderEntries(
       nextCursor: page.nextCursor ?? null,
       hasMore: page.hasMore,
       entryIds: page.entries.map((e) => e.id),
-      currentId: page.entries[0]?.id ?? 0,
+      currentId: 0,
     }))
   })
 }
@@ -132,7 +132,7 @@ export const apiRoutes = new Hono()
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
         entryIds: page.entries.map((e) => e.id),
-        currentId: page.entries[0]?.id ?? 0,
+        currentId: 0,
       }))
     })
   })
@@ -196,10 +196,17 @@ export const apiRoutes = new Hono()
     const id = Number(ctx.req.param('id'))
     const body = await parseBodySignals(ctx)
     return ServerSentEventGenerator.stream(async (generator) => {
-      await miniflux.markEntries([id], 'read')
+      const entry = await miniflux.getEntry(id)
+      const disabledAutoReadFeeds = body.disabledAutoReadFeeds ?? []
+      const keepUnreadIds = body.keepUnreadIds ?? []
+      // Skip when the entry's feed has auto-read disabled or the user has it
+      // explicitly kept unread. This is the single read policy for both the
+      // nav (j/k, toolbar arrows) and the scroll-driven auto-read hook.
+      const skip = disabledAutoReadFeeds.includes(entry.feed_id) || keepUnreadIds.includes(id)
+      if (!skip && entry.status === 'unread') {
+        await miniflux.markEntries([id], 'read')
+      }
       const fresh = await miniflux.getEntry(id)
-      const keepUnreadIds = (body.keepUnreadIds ?? []).filter((k: number) => k !== id)
-      generator.patchSignals(JSON.stringify({ keepUnreadIds }))
       generator.patchElements(
         await renderToString(
           <EntryItem entry={fresh} viewMode={body.viewMode ?? 'expanded'} />,
@@ -230,7 +237,7 @@ export const apiRoutes = new Hono()
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
         entryIds: page.entries.map((e) => e.id),
-        currentId: page.entries[0]?.id ?? 0,
+        currentId: 0,
       }))
     })
   })
@@ -264,7 +271,7 @@ export const apiRoutes = new Hono()
         nextCursor: page.nextCursor ?? null,
         hasMore: page.hasMore,
         entryIds: page.entries.map((e) => e.id),
-        currentId: page.entries[0]?.id ?? 0,
+        currentId: 0,
       }))
     })
   })

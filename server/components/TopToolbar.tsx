@@ -105,7 +105,7 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
       type="button"
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-2 md:order-none"
       title="Previous (k)"
-      data-on:click="const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.max(0, i - 1)]; $navRequest = $currentId;"
+      data-on:click="const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.max(0, i - 1)]; $navRequest = $currentId; @post('/api/entries/' + $currentId + '/auto-read');"
     >
       ▲
     </button>
@@ -113,7 +113,7 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
       type="button"
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-3 md:order-none"
       title="Next (j)"
-      data-on:click="const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.min($entryIds.length - 1, i + 1)]; $navRequest = $currentId;"
+      data-on:click="const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.min($entryIds.length - 1, i + 1)]; $navRequest = $currentId; @post('/api/entries/' + $currentId + '/auto-read');"
     >
       ▼
     </button>

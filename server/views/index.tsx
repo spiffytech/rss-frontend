@@ -60,11 +60,12 @@ const IndexView: FC<IndexViewProps> = ({
     // Icon fallback state (delegated error handler on the feed panel).
     iconFailed: {} as Record<number, boolean>,
     // The reading anchor: which entry is currently at the top of the viewport.
-    // The server seeds it with the first rendered entry id (an un-scrolled list
-    // always starts at the top), and the `track-top` plugin refreshes it as the
-    // user scrolls. It's a plain number, never null — an empty list renders no
-    // navigable entries, so the fallback 0 is never a real target.
-    currentId: entries[0]?.id ?? 0,
+    // The server seeds it as 0 (no selection) — a fresh list starts unselected
+    // and the first j/k press selects. `track-top` refreshes it as the user
+    // scrolls (but not on its initial observe). It's a plain number, never
+    // null — an empty list renders no navigable entries, so the fallback 0 is
+    // never a real target.
+    currentId: 0,
     // Transient target for the scroll-into-view watcher. Self-clears so a nav
     // request can't re-trigger, and the scroll watcher never writes currentId,
     // so user scroll → currentId patch → no scrollIntoView loop.
@@ -88,8 +89,8 @@ const IndexView: FC<IndexViewProps> = ({
     sidebarOpen: false,
   }
   const keydown = [
-    "if(evt.key === 'j' || evt.key === 'ArrowDown'){ evt.preventDefault(); const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.min($entryIds.length - 1, i + 1)]; $navRequest = $currentId; }",
-    "if(evt.key === 'k' || evt.key === 'ArrowUp'){ evt.preventDefault(); const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.max(0, i - 1)]; $navRequest = $currentId; }",
+    "if(evt.key === 'j' || evt.key === 'ArrowDown'){ evt.preventDefault(); const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.min($entryIds.length - 1, i + 1)]; $navRequest = $currentId; @post('/api/entries/' + $currentId + '/auto-read'); }",
+    "if(evt.key === 'k' || evt.key === 'ArrowUp'){ evt.preventDefault(); const i = $entryIds.indexOf($currentId); $currentId = $entryIds[Math.max(0, i - 1)]; $navRequest = $currentId; @post('/api/entries/' + $currentId + '/auto-read'); }",
     "if(evt.key === 'm'){ @post('/api/entries/' + $currentId + '/toggle-read'); }",
     "if(evt.key === 's'){ @post('/api/entries/' + $currentId + '/star'); }",
     "if(evt.key === 'v'){ $viewMode = $viewMode === 'expanded' ? 'list' : 'expanded'; @put('/api/prefs/view-mode'); }",

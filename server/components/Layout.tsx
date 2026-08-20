@@ -122,6 +122,11 @@ document.addEventListener('datastar-ready', () => {
     // the entry intersecting it owns $currentId. Only writes the signal on a
     // real change; never reads the DOM on demand.
     //
+    // The first observe() callback is skipped: at load the list is unselected
+    // ($currentId === 0) and the top entry already sits in the band, so lifting
+    // the initialized guard would re-select it before the user ever navigates.
+    // Subsequent scrolls (a real change) sync $currentId as before.
+    //
     // One shared IntersectionObserver per scroll root observes every
     // [data-track-top] entry. On each batch it records each entry's top/bottom
     // (relative to the container top, so a partially-scrolled-out entry has a
@@ -138,6 +143,19 @@ document.addEventListener('datastar-ready', () => {
         if (!trackTopState.has(scrollRoot)) {
           const registry = new Map();
           const observer = new IntersectionObserver((entries) => {
+            const isFirst = !trackTopState.get(scrollRoot)?.initialized;
+            if (isFirst) {
+              // Record initial geometry (so a subsequent scroll picks up the
+              // correct top) but don't write currentId yet.
+              for (const entry of entries) {
+                if (!entry.rootBounds) continue;
+                const top = entry.boundingClientRect.top - entry.rootBounds.top;
+                const bottom = entry.boundingClientRect.bottom - entry.rootBounds.top;
+                registry.set(entry.target.getAttribute('data-track-top'), { top, bottom });
+              }
+              trackTopState.get(scrollRoot).initialized = true;
+              return;
+            }
             for (const entry of entries) {
               if (!entry.rootBounds) continue;
               const top = entry.boundingClientRect.top - entry.rootBounds.top;
@@ -157,7 +175,7 @@ document.addEventListener('datastar-ready', () => {
             rootMargin: '0px 0px -95% 0px',
             threshold: 0,
           });
-          trackTopState.set(scrollRoot, { observer, registry });
+          trackTopState.set(scrollRoot, { observer, registry, initialized: false });
         }
         const s = trackTopState.get(scrollRoot);
         s.observer.observe(el);
