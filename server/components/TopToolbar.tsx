@@ -38,12 +38,13 @@ const Menu: FC<PropsWithChildren<{ label: string }>> = ({ label, children }) => 
 )
 
 /** A toggle row inside a menu, with a check. Persists via a `@put` after
- *  flipping the signal (datastar sends the new value implicitly). */
+ *  flipping the signal (datastar sends the new value implicitly), then
+ *  closes the menu. */
 const MenuToggle: FC<{ signal: string; label: string; persistUrl: string }> = ({ signal, label, persistUrl }) => (
   <button
     type="button"
     class="w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2"
-    data-on:click={`$${signal} = !$${signal}; @put('${persistUrl}')`}
+    data-on:click={`$${signal} = !$${signal}; @put('${persistUrl}'); $menuOpen = false`}
   >
     <span data-text={`$${signal} ? '✓' : ''`} class="w-4 inline-block"></span>
     {label}
@@ -140,7 +141,7 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
       <button
         type="button"
         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 block"
-        data-on:click={`$viewMode = $viewMode === 'expanded' ? 'list' : 'expanded'; @put('/api/prefs/view-mode')`}
+        data-on:click={`$viewMode = $viewMode === 'expanded' ? 'list' : 'expanded'; @put('/api/prefs/view-mode'); $menuOpen = false`}
       >
         <span data-text={`$viewMode === 'expanded' ? 'List view' : 'Expanded view'`}></span>
       </button>
@@ -148,7 +149,7 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
         <button
           type="button"
           class="w-full text-left px-3 py-1.5 hover:bg-gray-100 block"
-          data-on:click={`$filter.sort = $filter.sort === 'newest' ? 'oldest' : 'newest'; @put('/api/prefs/sort')`}
+          data-on:click={`$filter.sort = $filter.sort === 'newest' ? 'oldest' : 'newest'; @put('/api/prefs/sort'); $menuOpen = false`}
         >
           <span data-text={`$filter.sort === 'newest' ? 'Newest first' : 'Oldest first'`}></span>
         </button>
@@ -167,7 +168,7 @@ const TopToolbar: FC<TopToolbarProps> = ({ currentTitle, unreadCount, filter }) 
       <button
         type="button"
         class="w-full text-left px-3 py-1.5 hover:bg-gray-100 flex items-center gap-2"
-        data-on:click={`$hideReadItems = !$hideReadItems; @put('/api/prefs/hide-read-items')`}
+        data-on:click={`$hideReadItems = !$hideReadItems; @put('/api/prefs/hide-read-items'); $menuOpen = false`}
       >
         <span class="w-4 inline-block" data-text={`$hideReadItems ? '✓' : ''`}></span>
         Hide read items
