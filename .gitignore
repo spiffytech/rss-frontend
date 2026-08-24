@@ -1,15 +1,28 @@
 # dependencies (bun install)
 node_modules
 
-# output
+# Vite build output
+dist
+dist-ssr
+
+# datastar-era generated CSS (superseded by Vite hashing)
 public/style.css
 public/style-*.css
 public/.asset-manifest.json
 
 # dotenv environment variable files
 .env
+*.local
 
 # sqlite
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
+
+# tooling
+coverage
+*.tsbuildinfo
+.eslintcache
+test-results/
+playwright-report/
+__screenshots__/
