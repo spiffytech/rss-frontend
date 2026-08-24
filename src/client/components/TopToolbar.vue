@@ -131,17 +131,19 @@ function onSearchInput() {
       type="button"
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-2 md:order-none"
       title="Previous (k)"
+      aria-label="Previous entry (k)"
       @click="reader.move(-1); if (reader.currentId) reader.autoRead(reader.currentId)"
     >
-      ▲
+      ▲ Prev
     </button>
     <button
       type="button"
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-3 md:order-none"
       title="Next (j)"
+      aria-label="Next entry (j)"
       @click="reader.move(1); if (reader.currentId) reader.autoRead(reader.currentId)"
     >
-      ▼
+      Next ▼
     </button>
     <button
       type="button"
@@ -216,6 +218,7 @@ function onSearchInput() {
           <span class="w-4 inline-block">{{ reader.hideReadItems ? '✓' : '' }}</span>
           Hide read items
         </button>
+        <div class="my-1 border-t border-gray-200" aria-hidden="true"></div>
         <button
           type="button"
           class="w-full text-left px-3 py-1.5 hover:bg-gray-100"
@@ -230,6 +233,7 @@ function onSearchInput() {
         >
           Refresh feeds
         </button>
+        <div class="my-1 border-t border-gray-200" aria-hidden="true"></div>
         <button
           v-if="feedId != null && feedId !== ''"
           type="button"
@@ -238,10 +242,9 @@ function onSearchInput() {
         >
           Unsubscribe
         </button>
-        <div class="my-1 border-t border-gray-200" aria-hidden="true"></div>
         <button
           type="button"
-          class="w-full text-left px-3 py-1.5 hover:bg-gray-100 text-red-600"
+          class="w-full text-left px-3 py-1.5 hover:bg-gray-100"
           @click="onLogout"
         >
           Sign out
