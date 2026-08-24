@@ -211,6 +211,9 @@ export const useReaderStore = defineStore('reader', () => {
 
   /** Auto-read an entry as it enters the reading band. Optimistic. */
   async function autoRead(id: number) {
+    // Never auto-read during a search — scrolling/reading search results
+    // shouldn't mark matches read.
+    if (filter.value.search) return
     const entry = entries.value.find((e) => e.id === id)
     if (!entry || entry.status === 'read') return
     // The upstream directive guards via shouldAutoRead, but j/k/arrows call us

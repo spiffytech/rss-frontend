@@ -10,6 +10,12 @@ export function useKeyboard() {
   const reader = useReaderStore()
 
   function onKeydown(evt: KeyboardEvent) {
+    // Don't hijack typing: bail when focus is inside a text/edit control
+    // (search box, inline rename inputs, etc.).
+    const target = evt.target as HTMLElement | null
+    if (target && target.closest('input, textarea, select, [contenteditable="true"]')) {
+      return
+    }
     if (evt.key === 'j' || evt.key === 'ArrowDown') {
       evt.preventDefault()
       const id = reader.move(1)

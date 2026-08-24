@@ -87,7 +87,94 @@ export async function getEntriesPage(
   filter: EntriesFilter,
   cursor?: string,
 ): Promise<EntriesPage> {
-  const oldestFirst = filter.sort !== 'newest'
+  // Search always shows both unread + read matches, unread bucket first then
+  // read bucket — regardless of hideReadItems (a search is an explicit ask for
+  // results, not a reading list). Each bucket is ordered by the sort direction.
+  if (filter.search) {
+    return getSearchEntriesPage(filter, cursor)
+  }
+  return getReadingEntriesPage(filter, cursor)
+}
+
+/**
+ * Non-search reading query. Cursor is a plain published_at ISO string
+ * (inclusive ±1s boundary). For show-read-items mode, repeated `status` params
+ * (unread+read) are sent in a single request so the server returns both in
+ * published_at order, avoiding a merge-sort across two fetches.
+ */
+async function getReadingEntriesPage(
+  filter: EntriesFilter,
+  cursor?: string,
+): Promise<EntriesPage> {
+  const page = await fetchEntriesPage(filter, cursor ? { ts: cursor } : undefined)
+  return {
+    entries: page.entries,
+    nextCursor: page.nextTs,
+    hasMore: page.hasMore,
+  }
+}
+
+/**
+ * Search query — two-phase pagination. First returns all unread matches
+ * (ordered by sort), then all read matches. The cursor encodes which bucket
+ * we're in plus the published_at pivot: `unread:<ts>` → `read:` (start of read)
+ * → `read:<ts>`. Opqaue to the client.
+ */
+async function getSearchEntriesPage(
+  filter: EntriesFilter,
+  cursor?: string,
+): Promise<EntriesPage> {
+  const { bucket, ts } = parseSearchCursor(cursor)
+  const statuses = bucket === 'read' ? ['read'] : ['unread']
+  // Search is always newest-first (time desc), independent of the feed sort pref.
+  const page = await fetchEntriesPage(filter, ts ? { ts } : undefined, statuses, true)
+  if (page.hasMore) {
+    // Stay in this bucket.
+    return {
+      entries: page.entries,
+      nextCursor: `${bucket}:${page.nextTs}`,
+      hasMore: true,
+    }
+  }
+  if (bucket === 'unread') {
+    // Unread bucket exhausted → hand off to the read bucket (first page).
+    return { entries: page.entries, nextCursor: 'read:', hasMore: true }
+  }
+  // Read bucket exhausted → search is done.
+  return { entries: page.entries, nextCursor: undefined, hasMore: false }
+}
+
+/** Decode a search cursor: "unread:<ts>" | "read:<ts>" | "read:" | bare <ts>. */
+function parseSearchCursor(cursor?: string): {
+  bucket: 'unread' | 'read'
+  ts?: string
+} {
+  if (!cursor) return { bucket: 'unread' }
+  const i = cursor.indexOf(':')
+  if (i === -1) return { bucket: 'unread', ts: cursor || undefined }
+  const prefix = cursor.slice(0, i)
+  const ts = cursor.slice(i + 1) || undefined
+  return { bucket: prefix === 'read' ? 'read' : 'unread', ts }
+}
+
+/**
+ * Fetch one page of entries matching filter for the given statuses (repeated
+ * status params), ordered by the filter sort, with an optional inclusive ±1s
+ * cursor pivot. Returns raw entries + a next published_at pivot (unencoded).
+ */
+async function fetchEntriesPage(
+  filter: EntriesFilter,
+  cursor?: { ts?: string },
+  statuses: string[] = ['unread'],
+  forceNewestFirst = false,
+): Promise<{
+  entries: MinifluxEntry[]
+  nextTs?: string
+  hasMore: boolean
+}> {
+  // Search always sorts newest-first regardless of the per-feed sort pref;
+  // reading views honour the filter sort.
+  const oldestFirst = !forceNewestFirst && filter.sort !== 'newest'
   const direction = oldestFirst ? 'asc' : 'desc'
   const params = new URLSearchParams()
   params.set('order', 'published_at')
@@ -96,10 +183,7 @@ export async function getEntriesPage(
   params.set('limit', String(PAGE_SIZE + 1))
   if (filter.starred) params.set('starred', 'true')
   if (filter.search) params.set('search', filter.search)
-  // Repeated status param: unread + read when not hiding read items.
-  // Miniflux ≥2.0.24 supports repeated status filters in one request.
-  params.append('status', 'unread')
-  if (!filter.hideReadItems) params.append('status', 'read')
+  for (const s of statuses) params.append('status', s)
 
   // Cursor: inclusive boundary so bulk same-second publishes aren't dropped.
   // Miniflux's published_before/after are strict (> ts / < ts) and exclude the
@@ -109,8 +193,8 @@ export async function getEntriesPage(
   // published_before = floor(pivot_s) + 1 — re-including the pivot's whole
   // second. The client dedupes the resulting overlap by entry id (see
   // reader.ts loadMore).
-  if (cursor) {
-    const ts = Math.floor(new Date(cursor).getTime() / 1000)
+  if (cursor?.ts) {
+    const ts = Math.floor(new Date(cursor.ts).getTime() / 1000)
     if (oldestFirst) {
       params.set('published_after', String(ts - 1))
     } else {
@@ -135,9 +219,9 @@ export async function getEntriesPage(
   })
 
   const last = entries.length > 0 ? entries[entries.length - 1] : undefined
-  const nextCursor = hasMore && last ? last.published_at : undefined
+  const nextTs = hasMore && last ? last.published_at : undefined
 
-  return { entries, nextCursor, hasMore }
+  return { entries, nextTs, hasMore }
 }
 
 /**

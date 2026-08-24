@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 
 import { useReaderStore } from '@/client/stores/reader'
@@ -18,7 +18,16 @@ const searchOpen = ref(false)
 const searchText = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | undefined
 
-const feedId = reader.filter.feedId
+const feedId = computed(() => reader.filter.feedId)
+
+// Keep the search box in sync with the active filter: navigating to another
+// feed clears the filter's search, so the box should clear too.
+watch(
+  () => reader.filter.search,
+  (s) => {
+    searchText.value = s ?? ''
+  },
+)
 
 // Outside-click closes the menu (mirrors the old datastar __outside).
 const menuEl = ref<HTMLElement | null>(null)
@@ -41,8 +50,9 @@ async function onSort() {
 }
 
 async function onToggleAutoRead() {
-  if (feedId != null && feedId !== '') {
-    await feeds.toggleAutoRead(Number(feedId))
+  const id = feedId.value
+  if (id != null && id !== '') {
+    await feeds.toggleAutoRead(Number(id))
   }
   menuOpen.value = false
 }
@@ -63,9 +73,10 @@ async function onRefresh() {
 }
 
 async function onUnsubscribe() {
-  if (feedId == null || feedId === '') return
+  const id = feedId.value
+  if (id == null || id === '') return
   if (!confirm('Unsubscribe from this feed?')) return
-  await reader.unsubscribe(Number(feedId))
+  await reader.unsubscribe(Number(id))
   menuOpen.value = false
   router.push({ name: 'reader' })
 }
@@ -79,7 +90,9 @@ function onSearchInput() {
   clearTimeout(searchTimer)
   searchTimer = setTimeout(() => {
     reader.setFilter({ ...reader.filter, search: searchText.value || undefined })
-    reader.load()
+    // Entries + counters only — not the full bootstrap (prefs/panel refetch)
+    // which the debounce would otherwise fire on every search keystroke.
+    reader.loadView()
   }, 300)
 }
 </script>
