@@ -13,6 +13,15 @@ const isExpandedView = computed(() => reader.viewMode === 'expanded')
 const showContent = computed(() => isExpandedView.value)
 
 const contentHtml = computed(() => lazyHtml(props.entry.content))
+
+function onCardClick(e: MouseEvent) {
+  // Star / keep-unread buttons have their own semantics — don't double-fire.
+  if ((e.target as HTMLElement).closest('button')) return
+  // Respect explicit "keep unread" (m key) — autoRead doesn't check this itself,
+  // it relies on the scroll directive to guard.
+  if (reader.keepUnreadIds.has(props.entry.id)) return
+  reader.autoRead(props.entry.id)
+}
 </script>
 
 <template>
@@ -23,6 +32,7 @@ const contentHtml = computed(() => lazyHtml(props.entry.content))
     class="msgFrame px-3 py-2.5 border-b border-gray-200"
     :class="unread ? 'bg-white' : 'bg-gray-50'"
     v-intersect-line="{ entryId: entry.id, feedId: entry.feed_id }"
+    @click="onCardClick"
   >
     <div class="msgButtons flex items-center gap-x-1 md:gap-x-2 text-xs">
       <a
