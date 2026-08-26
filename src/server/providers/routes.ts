@@ -190,10 +190,10 @@ export function createProviderRoutes(
       zValidator('json', z.object({ filter: zodEntriesFilter.partial().optional() })),
       async (c) => {
         const q = c.req.valid('json').filter
-        const userId = deps.getUserId()
-        if (userId != null) {
-          await provider.markAllReadByFilter(resolvedFilter(q), userId)
-        }
+        // No userId guard here: mark-all is token-scoped (every branch works
+        // with the session's own API key), so it must run even for legacy
+        // session cookies that predate the userId field.
+        await provider.markAllReadByFilter(resolvedFilter(q))
         const filter = resolvedFilter(q)
         // One-call: fresh page 1 + counters, no client entryIds.
         const [page, counters] = await Promise.all([

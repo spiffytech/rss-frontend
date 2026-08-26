@@ -45,7 +45,9 @@ export interface Provider {
   updateFeed(feedId: number, title: string): Promise<void>
   getFeedIcon(feedId: number): Promise<{ mime_type: string; data: string }>
   /** Mark everything matching a filter read, server-side (no client id lists).
-   *  Dispatch: feedId -> feed native mark-all, categoryId -> category native,
-   *  starred -> entry-ids, search -> iterate pages, else -> user-wide. */
-  markAllReadByFilter(filter: EntriesFilter, userId: number): Promise<void>
+   *  Token-scoped: operates on the session credential's own account, no userId
+   *  needed. Dispatch: feedId -> feed native mark-all, categoryId -> category
+   *  native, starred/Latest -> entry-ids + bulk update, search -> iterate
+   *  pages. */
+  markAllReadByFilter(filter: EntriesFilter): Promise<void>
 }

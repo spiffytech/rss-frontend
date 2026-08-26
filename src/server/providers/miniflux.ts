@@ -54,9 +54,10 @@ export const minifluxProvider: Provider = {
    *  - starred → /entries/ids (ids endpoint honors starred)
    *  - search → no native endpoint and /entries/ids ignores search, so iterate
    *    pages of unread search results server-side and mark each page
-   *  - else (Latest / all user entries) → native PUT /users/:id/mark-all-as-read
+   *  - else (Latest / all user entries) → /entries/ids + bulk PUT /entries
+   *    (token-scoped, so no userId needed — see Provider doc)
    */
-  async markAllReadByFilter(filter, userId) {
+  async markAllReadByFilter(filter) {
     const { feedId, categoryId, starred, search } = filter
     if (feedId != null && feedId !== '') {
       await mf.markFeedAllRead(Number(feedId))
@@ -75,6 +76,11 @@ export const minifluxProvider: Provider = {
       await mf.markSearchAllRead(search)
       return
     }
-    await mf.markUserAllRead(userId)
+    // Latest / all user entries: fetch all unread ids and bulk-mark them.
+    // Same pattern as starred — token-scoped, needs no userId (the native
+    // PUT /users/:id/mark-all-as-read exists but keys off the session's
+    // userId, which legacy cookies may lack).
+    const ids = await mf.getEntryIds({ status: 'unread' })
+    if (ids.length > 0) await mf.markEntries(ids, 'read')
   },
 }
