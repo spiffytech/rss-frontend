@@ -102,7 +102,7 @@ function onSearchInput() {
     <!-- Mobile hamburger: toggles the sidebar drawer -->
     <button
       type="button"
-      class="md:hidden px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
+      class="md:hidden min-w-8 px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none"
       title="Toggle feed list"
       @click="emit('toggleSidebar')"
     >
