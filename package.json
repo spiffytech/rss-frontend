@@ -1,6 +1,7 @@
 {
   "name": "miniflux-frontend",
   "version": "0.0.0",
+  "license": "MutuaL-1.2",
   "private": true,
   "type": "module",
   "scripts": {
