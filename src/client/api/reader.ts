@@ -8,6 +8,7 @@ import type {
   BootstrapResult,
   EntryResult,
   EntriesResult,
+  FeedPanelResult,
   MarkAllReadResult,
   RefreshResult,
   RenameResult,
@@ -23,6 +24,8 @@ export interface ReaderApi {
   bootstrap(filter: EntriesFilter): Promise<BootstrapResult>
   entries(filter: EntriesFilter, cursor?: string): Promise<EntriesResult>
   counters(): Promise<Record<string, number>>
+  /** Lean sidebar snapshot (feeds + categories + unreads) for idle polling. */
+  panel(): Promise<FeedPanelResult>
 
   toggleRead(id: number): Promise<EntryResult>
   star(id: number): Promise<EntryResult>
@@ -87,6 +90,10 @@ export function createMinifluxReaderApi(): ReaderApi {
     },
     async counters() {
       return unwrap<Record<string, number>>(await api.counters.$get())
+    },
+
+    async panel() {
+      return unwrap<FeedPanelResult>(await api.panel.$get())
     },
 
     async toggleRead(id) {

@@ -50,6 +50,24 @@ export const useFeedsStore = defineStore('feeds', () => {
     counters.value = next
   }
 
+  /** Idle-poll: refresh unread counters from the server; errors never throw. */
+  async function refreshCounters() {
+    try {
+      applyCounters(await api.counters())
+    } catch (err) {
+      console.error('Failed to refresh sidebar counters', err)
+    }
+  }
+
+  /** Idle-poll (slow): full panel snapshot so new/renamed feeds appear. */
+  async function refreshPanel() {
+    try {
+      applyPanel(await api.panel())
+    } catch (err) {
+      console.error('Failed to refresh sidebar panel', err)
+    }
+  }
+
   /** Local ±1 on one feed's unread count (exact, from a known single toggle). */
   function adjustCounter(feedId: number, delta: -1 | 1) {
     const cur = (counters.value[feedId] ?? 0) + delta
@@ -130,6 +148,8 @@ export const useFeedsStore = defineStore('feeds', () => {
     applyPanel,
     applyFeedsCategories,
     applyCounters,
+    refreshCounters,
+    refreshPanel,
     adjustCounter,
     applyUserPrefs,
     markIconFailed,

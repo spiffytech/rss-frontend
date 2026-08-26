@@ -44,6 +44,9 @@ export const useReaderStore = defineStore('reader', () => {
   // new feed leaves the list unselected (currentId stays 0) exactly like a
   // fresh page load — instead of inheriting the previous feed's selection.
   const pageGen = ref(0)
+  // True while the entry-list scroll container sits within ~200px of its bottom
+  // (set by ReaderView's scroll handler). Gates the idle-time tail recheck.
+  const atListEnd = ref(false)
 
   const entryIds = computed(() => entries.value.map((e) => e.id))
 
@@ -99,6 +102,7 @@ export const useReaderStore = defineStore('reader', () => {
     currentId.value = 0
     navRequest.value = null
     userHasScrolled.value = false
+    atListEnd.value = false
     pageGen.value++
   }
 
@@ -133,24 +137,25 @@ export const useReaderStore = defineStore('reader', () => {
   async function loadMore() {
     if (loadingMore.value || !hasMore.value || nextCursor.value == null) return
     loadingMore.value = true
-    const filterForPage: EntriesFilter = {
-      ...filter.value,
-      sort: sort.value,
-      hideReadItems: hideReadItems.value,
-    }
-    const result = await api.entries(filterForPage, nextCursor.value)
-    // Dedupe by id: the inclusive ±1s cursor may re-include the pivot's second.
-    const fresh = result.entries.filter((e) => !seenIds.value.has(e.id))
-    if (fresh.length === 0) {
-      // Degenerate bulk-second tail — everything overlapped. Stop cleanly.
-      hasMore.value = false
-    } else {
+    try {
+      const filterForPage: EntriesFilter = {
+        ...filter.value,
+        sort: sort.value,
+        hideReadItems: hideReadItems.value,
+      }
+      const result = await api.entries(filterForPage, nextCursor.value)
+      // Dedupe by id: the inclusive ±1s window may re-serve entries sharing the
+      // pivot's second. The cursor's skip count guarantees the SERVER advances
+      // every page regardless, so a fully-duplicate page is no longer a reason
+      // to stop — adopt cursor/hasMore unconditionally and keep scrolling.
+      const fresh = result.entries.filter((e) => !seenIds.value.has(e.id))
       for (const e of fresh) seenIds.value.add(e.id)
-      entries.value = [...entries.value, ...fresh]
+      if (fresh.length > 0) entries.value = [...entries.value, ...fresh]
       nextCursor.value = result.nextCursor
       hasMore.value = result.hasMore
+    } finally {
+      loadingMore.value = false
     }
-    loadingMore.value = false
   }
 
   // ---- Single-entry mutations ----
@@ -235,6 +240,44 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   // ---- List-level mutations ----
+
+  /**
+   * End-of-list recheck: ask the server directly whether entries exist beyond
+   * our loaded tail — items that arrived since the feed was opened, or ones
+   * local counters can't vouch for. Appends whatever is genuinely new and
+   * resumes normal pagination if the server says more remains. Skipped for
+   * search views: their two-phase cursor can't be rebuilt from one entry.
+   */
+  const checkingTail = ref(false)
+
+  async function checkTail() {
+    if (checkingTail.value || loadingMore.value || hasMore.value) return
+    if (filter.value.search) return
+    const last = entries.value[entries.value.length - 1]
+    if (!last) return
+    checkingTail.value = true
+    try {
+      // Persist pending read/unread first so the server filters with current truth.
+      await flushPending()
+      const filterForPage: EntriesFilter = {
+        ...filter.value,
+        sort: sort.value,
+        hideReadItems: hideReadItems.value,
+      }
+      // Fresh window anchored at the tail entry's second with skip=1: serves
+      // unseen same-second siblings plus everything beyond it in sort order.
+      const result = await api.entries(filterForPage, `${last.published_at}~1`)
+      const fresh = result.entries.filter((e) => !seenIds.value.has(e.id))
+      for (const e of fresh) seenIds.value.add(e.id)
+      if (fresh.length > 0) entries.value = [...entries.value, ...fresh]
+      if (result.hasMore && result.nextCursor != null) {
+        nextCursor.value = result.nextCursor
+        hasMore.value = true
+      }
+    } finally {
+      checkingTail.value = false
+    }
+  }
 
   async function markAllRead() {
     await flushPending()
@@ -327,6 +370,7 @@ export const useReaderStore = defineStore('reader', () => {
     keepUnreadIds,
     userHasScrolled,
     pageGen,
+    atListEnd,
     entryIds,
     unreadCount,
     currentTitle,
@@ -334,6 +378,7 @@ export const useReaderStore = defineStore('reader', () => {
     load,
     loadView,
     loadMore,
+    checkTail,
     toggleRead,
     star,
     autoRead,

@@ -8,6 +8,13 @@ import type {
   MinifluxFeed,
 } from '../../shared/types'
 import type { EntriesFilter } from '../../shared/filter'
+import {
+  decodeCursor,
+  decodeSearchCursor,
+  encodeCursor,
+  encodeSearchCursor,
+  type PageCursor,
+} from '../../shared/pagination'
 
 const config = loadConfig()
 
@@ -74,14 +81,12 @@ const PAGE_SIZE = 20
  * Cursor-paginated entry fetch. Fetches PAGE_SIZE + 1 entries to determine
  * hasMore without an extra round-trip; slices to PAGE_SIZE before returning.
  *
- * Cursor is `published_before`/`published_after` (unix seconds) on the last
- * entry of the previous page. Miniflux's filters are strict (exclude the
- * boundary), so we apply +1/-1 second adjustment to include the pivot entry's
- * neighbors. Without a cursor, fetches the first page.
- *
- * For show-read-items mode, repeated `status` params (unread+read) are sent
- * in a single request so the server returns both in published_at order,
- * avoiding a merge-sort across two fetches.
+ * The cursor (see src/shared/pagination.ts) anchors the query window at a
+ * published_at SECOND plus a skip count — not just a timestamp pivot. With a
+ * plain published_after/before pivot, feeds where >PAGE_SIZE entries share one
+ * publish second would re-fetch the same block forever; the skip count makes
+ * every page advance unconditionally, so scrolling reaches the true end of
+ * what Miniflux holds. Without a cursor, fetches the first page.
  */
 export async function getEntriesPage(
   filter: EntriesFilter,
@@ -97,19 +102,19 @@ export async function getEntriesPage(
 }
 
 /**
- * Non-search reading query. Cursor is a plain published_at ISO string
- * (inclusive ±1s boundary). For show-read-items mode, repeated `status` params
- * (unread+read) are sent in a single request so the server returns both in
- * published_at order, avoiding a merge-sort across two fetches.
+ * Non-search reading query: single window over the filter's statuses. For
+ * show-read-items mode, repeated `status` params (unread+read) are sent in a
+ * single request so the server returns both in published_at order, avoiding a
+ * merge-sort across two fetches.
  */
 async function getReadingEntriesPage(
   filter: EntriesFilter,
   cursor?: string,
 ): Promise<EntriesPage> {
-  const page = await fetchEntriesPage(filter, cursor ? { ts: cursor } : undefined)
+  const page = await fetchEntriesPage(filter, decodeCursor(cursor))
   return {
     entries: page.entries,
-    nextCursor: page.nextTs,
+    nextCursor: page.nextAnchor ? encodeCursor(page.nextAnchor) : undefined,
     hasMore: page.hasMore,
   }
 }
@@ -117,59 +122,60 @@ async function getReadingEntriesPage(
 /**
  * Search query — two-phase pagination. First returns all unread matches
  * (ordered by sort), then all read matches. The cursor encodes which bucket
- * we're in plus the published_at pivot: `unread:<ts>` → `read:` (start of read)
- * → `read:<ts>`. Opqaue to the client.
+ * we're in plus the window anchor/skip: `unread~<ts>~<skip>` → `read~`
+ * (start of read bucket) → `read~<ts>~<skip>`. Opaque to the client.
  */
 async function getSearchEntriesPage(
   filter: EntriesFilter,
   cursor?: string,
 ): Promise<EntriesPage> {
-  const { bucket, ts } = parseSearchCursor(cursor)
-  const statuses = bucket === 'read' ? ['read'] : ['unread']
+  const { bucket, anchor } = decodeSearchCursor(cursor)
+  const statuses: string[] = bucket === 'read' ? ['read'] : ['unread']
   // Search is always newest-first (time desc), independent of the feed sort pref.
-  const page = await fetchEntriesPage(filter, ts ? { ts } : undefined, statuses, true)
-  if (page.hasMore) {
+  const page = await fetchEntriesPage(filter, anchor, statuses, true)
+  if (page.hasMore && page.nextAnchor) {
     // Stay in this bucket.
     return {
       entries: page.entries,
-      nextCursor: `${bucket}:${page.nextTs}`,
+      nextCursor: encodeSearchCursor(bucket, page.nextAnchor),
       hasMore: true,
     }
   }
   if (bucket === 'unread') {
     // Unread bucket exhausted → hand off to the read bucket (first page).
-    return { entries: page.entries, nextCursor: 'read:', hasMore: true }
+    return { entries: page.entries, nextCursor: 'read~', hasMore: true }
   }
   // Read bucket exhausted → search is done.
   return { entries: page.entries, nextCursor: undefined, hasMore: false }
 }
 
-/** Decode a search cursor: "unread:<ts>" | "read:<ts>" | "read:" | bare <ts>. */
-function parseSearchCursor(cursor?: string): {
-  bucket: 'unread' | 'read'
-  ts?: string
-} {
-  if (!cursor) return { bucket: 'unread' }
-  const i = cursor.indexOf(':')
-  if (i === -1) return { bucket: 'unread', ts: cursor || undefined }
-  const prefix = cursor.slice(0, i)
-  const ts = cursor.slice(i + 1) || undefined
-  return { bucket: prefix === 'read' ? 'read' : 'unread', ts }
-}
+const toSec = (iso: string): number => Math.floor(new Date(iso).getTime() / 1000)
 
 /**
  * Fetch one page of entries matching filter for the given statuses (repeated
- * status params), ordered by the filter sort, with an optional inclusive ±1s
- * cursor pivot. Returns raw entries + a next published_at pivot (unencoded).
+ * status params), ordered by the filter sort, with an optional anchored
+ * inclusive ±1s window plus result-skip offset. Returns the served entries
+ * plus the NEXT window anchor (unencoded), computed as follows:
+ *
+ *  - If the page still ends inside the anchor's second, the window doesn't
+ *    move and everything served so far sits inside it: skip += served count.
+ *  - Otherwise the window shrinks to start at the last entry's second. Every
+ *    previously served entry is strictly before that second EXCEPT those this
+ *    page served within it, so skip resets to the count of this page's entries
+ *    sharing that second (usually exactly 1 — the pivot itself, re-included by
+ *    the inclusive ±1s boundary and deduped client-side).
+ *
+ * Either branch advances monotonically, so pagination terminates at the true
+ * end of the result set even for bulk same-second publishes.
  */
 async function fetchEntriesPage(
   filter: EntriesFilter,
-  cursor?: { ts?: string },
+  cursor: PageCursor = { skip: 0 },
   statuses: string[] = ['unread'],
   forceNewestFirst = false,
 ): Promise<{
   entries: MinifluxEntry[]
-  nextTs?: string
+  nextAnchor?: PageCursor
   hasMore: boolean
 }> {
   // Search always sorts newest-first regardless of the per-feed sort pref;
@@ -193,13 +199,14 @@ async function fetchEntriesPage(
   // published_before = floor(pivot_s) + 1 — re-including the pivot's whole
   // second. The client dedupes the resulting overlap by entry id (see
   // reader.ts loadMore).
-  if (cursor?.ts) {
-    const ts = Math.floor(new Date(cursor.ts).getTime() / 1000)
+  if (cursor.anchorTs) {
+    const ts = toSec(cursor.anchorTs)
     if (oldestFirst) {
       params.set('published_after', String(ts - 1))
     } else {
       params.set('published_before', String(ts + 1))
     }
+    if (cursor.skip > 0) params.set('offset', String(cursor.skip))
   }
 
   // Feed-specific queries must go through /v1/feeds/:id/entries.
@@ -218,10 +225,20 @@ async function fetchEntriesPage(
     return oldestFirst ? diff : -diff
   })
 
+  let nextAnchor: PageCursor | undefined
   const last = entries.length > 0 ? entries[entries.length - 1] : undefined
-  const nextTs = hasMore && last ? last.published_at : undefined
+  if (hasMore && last) {
+    const lastSec = toSec(last.published_at)
+    if (cursor.anchorTs && toSec(cursor.anchorTs) === lastSec) {
+      // Same window as before: everything served so far is inside it.
+      nextAnchor = { anchorTs: cursor.anchorTs, skip: cursor.skip + entries.length }
+    } else {
+      const atLastSec = entries.filter((e) => toSec(e.published_at) === lastSec).length
+      nextAnchor = { anchorTs: last.published_at, skip: atLastSec }
+    }
+  }
 
-  return { entries, nextTs, hasMore }
+  return { entries, nextAnchor, hasMore }
 }
 
 /**
@@ -263,11 +280,6 @@ export function markFeedAllRead(feedId: number): Promise<void> {
 /** Mark a whole category read (native Miniflux endpoint). */
 export function markCategoryAllRead(categoryId: number): Promise<void> {
   return request(`/categories/${categoryId}/mark-all-as-read`, { method: 'PUT' })
-}
-
-/** Mark the whole user's entries read (native Miniflux endpoint). */
-export function markUserAllRead(userId: number): Promise<void> {
-  return request(`/users/${userId}/mark-all-as-read`, { method: 'PUT' })
 }
 
 /**

@@ -9,6 +9,7 @@ import { useReaderStore } from '@/client/stores/reader'
 import { useKeyboard } from '@/client/composables/keyboard'
 import { useSidebarResize } from '@/client/composables/resize'
 import { useMediaQuery } from '@/client/composables/media'
+import { useIdleRefresh } from '@/client/composables/polling'
 import { scrollToEntry } from '@/client/composables/nav'
 import { parseFilterFromUrl } from '@/shared/filter'
 
@@ -17,6 +18,7 @@ const reader = useReaderStore()
 
 useKeyboard()
 useSidebarResize()
+useIdleRefresh()
 
 const isDesktop = useMediaQuery('(min-width: 48rem)')
 const sidebarOpen = ref(false)
@@ -76,15 +78,18 @@ watch(
   },
 )
 
-// Mark userHasScrolled on the entry-list scroll container.
+// Mark userHasScrolled + end-of-list state on the entry-list scroll container.
+// atListEnd gates the idle-time tail recheck (see composables/polling.ts).
 function onListScroll() {
   reader.userHasScrolled = true
+  const el = scrollEl.value
+  if (el) reader.atListEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 200
 }
 </script>
 
 <template>
   <div class="grid grid-rows-[auto_1fr] app-container flex-1 min-h-0">
-    <TopToolbar />
+    <TopToolbar @toggle-sidebar="sidebarOpen = !sidebarOpen" />
 
     <div class="relative grid grid-cols-1 md:grid-cols-[var(--sidebar-w)_1fr] gap-x-3 min-h-0 overflow-hidden">
       <!-- Sidebar: static column on md+, off-canvas drawer on mobile toggled

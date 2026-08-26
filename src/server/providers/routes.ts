@@ -121,6 +121,11 @@ export function createProviderRoutes(
       return c.json(counters.unreads)
     })
 
+    // ---- Panel (lean sidebar snapshot; polled while the page sits idle) ----
+    .get('/panel', async (c) => {
+      return c.json(await feedPanel(provider))
+    })
+
     // ---- Single-entry mutations ----
 
     // Batched status set (read/unread). The client is optimistic: it applies
