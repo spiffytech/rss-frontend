@@ -16,8 +16,6 @@
 
 import type { Directive } from 'vue'
 import { useReaderStore } from '@/client/stores/reader'
-import { useFeedsStore } from '@/client/stores/feeds'
-import { shouldAutoRead } from '@/shared/reading'
 
 function getScrollRoot(el: Element): Element {
   return el.closest('[data-testid="entry-list"]')?.parentElement ?? document.body
@@ -27,7 +25,6 @@ export const vIntersectLine: Directive<HTMLElement, { entryId: number; feedId: n
   mounted(el, binding) {
     const { entryId, feedId } = binding.value
     const reader = useReaderStore()
-    const feeds = useFeedsStore()
     const scrollRoot = getScrollRoot(el)
     let initialized = false
     let intersecting = false
@@ -71,20 +68,9 @@ export const vIntersectLine: Directive<HTMLElement, { entryId: number; feedId: n
     scrollRoot.addEventListener('scroll', onScroll, { passive: true })
 
     function fire() {
-      const entry = reader.entries.find((e) => e.id === entryId)
-      if (
-        shouldAutoRead({
-          viewMode: reader.viewMode,
-          userHasScrolled: reader.userHasScrolled,
-          disabledAutoReadFeeds: feeds.disabledAutoReadFeeds,
-          keepUnreadIds: [...reader.keepUnreadIds],
-          feedId,
-          entryId,
-          status: entry?.status ?? 'read',
-        })
-      ) {
-        reader.autoRead(entryId)
-      }
+      // The store's autoRead owns the full guard (viaScroll=true keeps the
+      // userHasScrolled requirement) — same path as j/k/buttons/click.
+      reader.autoRead(entryId, true)
     }
 
     ;(el as HTMLElement & { __intersectLineCleanup?: () => void }).__intersectLineCleanup = () => {

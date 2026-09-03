@@ -92,7 +92,7 @@ function onSearchInput() {
     reader.setFilter({ ...reader.filter, search: searchText.value || undefined })
     // Entries + counters only — not the full bootstrap (prefs/panel refetch)
     // which the debounce would otherwise fire on every search keystroke.
-    reader.loadView()
+    reader.reloadView()
   }, 300)
 }
 </script>
@@ -145,7 +145,7 @@ function onSearchInput() {
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-2 md:order-none"
       title="Previous (k)"
       aria-label="Previous entry (k)"
-      @click="reader.move(-1); if (reader.currentId) reader.autoRead(reader.currentId)"
+      @click="reader.moveAndRead(-1)"
     >
       ▲ Prev
     </button>
@@ -154,7 +154,7 @@ function onSearchInput() {
       class="px-2 py-2 border border-gray-300 rounded-md hover:bg-gray-100 leading-none order-3 md:order-none"
       title="Next (j)"
       aria-label="Next entry (j)"
-      @click="reader.move(1); if (reader.currentId) reader.autoRead(reader.currentId)"
+      @click="reader.moveAndRead(1)"
     >
       Next ▼
     </button>

@@ -9,6 +9,7 @@ import { defineStore } from 'pinia'
 import { createMinifluxReaderApi } from '@/client/api/reader'
 import { useFeedsStore } from '@/client/stores/feeds'
 import type { EntriesFilter } from '@/shared/filter'
+import { shouldAutoRead } from '@/shared/reading'
 import type { FeedPrefs, MinifluxEntry } from '@/shared/types'
 
 const api = createMinifluxReaderApi()
@@ -118,7 +119,7 @@ export const useReaderStore = defineStore('reader', () => {
     return result
   }
 
-  async function loadView() {
+  async function reloadView() {
     // Persist any pending optimistic read/unread before replacing entries with
     // server truth, so a quick nav doesn't drop the marks.
     await flushPending()
@@ -214,16 +215,32 @@ export const useReaderStore = defineStore('reader', () => {
     else keepUnreadIds.value.delete(id)
   }
 
-  /** Auto-read an entry as it enters the reading band. Optimistic. */
-  async function autoRead(id: number) {
+  /**
+   * Single guarded entry point for auto-read — every trigger (scroll band,
+   * j/k/buttons, card click) funnels here so the guard list is identical
+   * regardless of how the read was provoked. `viaScroll` marks the passive
+   * scroll trigger, which still requires the user to have actually scrolled;
+   * explicit triggers (key/button/click) are deliberate by definition.
+   */
+  async function autoRead(id: number, viaScroll = false) {
     // Never auto-read during a search — scrolling/reading search results
     // shouldn't mark matches read.
     if (filter.value.search) return
     const entry = entries.value.find((e) => e.id === id)
-    if (!entry || entry.status === 'read') return
-    // The upstream directive guards via shouldAutoRead, but j/k/arrows call us
-    // directly — preserve the old server-side disabled-feeds check here.
-    if (feeds.disabledAutoReadFeeds.includes(entry.feed_id)) return
+    if (!entry) return
+    if (
+      !shouldAutoRead({
+        viewMode: viewMode.value,
+        userHasScrolled: viaScroll ? userHasScrolled.value : true,
+        disabledAutoReadFeeds: feeds.disabledAutoReadFeeds,
+        keepUnreadIds: [...keepUnreadIds.value],
+        feedId: entry.feed_id,
+        entryId: id,
+        status: entry.status,
+      })
+    ) {
+      return
+    }
     applyStatusOptimistically(id, 'read')
   }
 
@@ -328,7 +345,7 @@ export const useReaderStore = defineStore('reader', () => {
     await api.setSort(currentFeedId(), mode)
     const feedId = currentFeedId()
     if (feedId != null) feedPrefs.value = { ...feedPrefs.value, [feedId]: { ...feedPrefs.value[feedId], sort: mode } }
-    await loadView()
+    await reloadView()
   }
 
   async function setHideReadItems(hide: boolean) {
@@ -336,10 +353,8 @@ export const useReaderStore = defineStore('reader', () => {
     await api.setHideReadItems(currentFeedId(), hide)
     const feedId = currentFeedId()
     if (feedId != null) feedPrefs.value = { ...feedPrefs.value, [feedId]: { ...feedPrefs.value[feedId], hideReadItems: hide } }
-    await loadView()
+    await reloadView()
   }
-
-  // ---- Keyboard nav (j/k/arrows) ----
 
   /** Move the reading anchor by delta; returns the new currentId (0 when none). */
   function move(delta: number): number {
@@ -352,6 +367,12 @@ export const useReaderStore = defineStore('reader', () => {
       return next
     }
     return 0
+  }
+
+  /** Move the reading anchor and auto-read the new current entry (j/k/buttons). */
+  function moveAndRead(delta: number) {
+    const id = move(delta)
+    if (id) void autoRead(id)
   }
 
   return {
@@ -376,7 +397,7 @@ export const useReaderStore = defineStore('reader', () => {
     currentTitle,
     setFilter,
     load,
-    loadView,
+    reloadView,
     loadMore,
     checkTail,
     toggleRead,
@@ -389,5 +410,6 @@ export const useReaderStore = defineStore('reader', () => {
     setSort,
     setHideReadItems,
     move,
+    moveAndRead,
   }
 })

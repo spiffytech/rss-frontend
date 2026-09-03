@@ -135,17 +135,15 @@ describe('EntryItem', () => {
 })
 
 describe('v-intersect-line (auto-read)', () => {
-  it('does not auto-read on the initial observe, then fires after scrolling', () => {
+  it('does not auto-read on the initial observe, then fires via the store guard after scrolling', () => {
     const reader = useReaderStore()
     reader.viewMode = 'expanded'
     reader.userHasScrolled = false
+    reader.entries = [entry]
     const autoReadSpy = vi.spyOn(reader, 'autoRead').mockResolvedValue({} as never)
 
     const Wrapper = {
       template: `<article v-intersect-line="{ entryId: 42, feedId: 7 }"></article>`,
-      setup() {
-        return { readerObj: { entries: [entry] } }
-      },
     }
     const wrapper = mount(Wrapper, { global: { directives: globalDirectives } })
     const el = wrapper.element
@@ -155,33 +153,11 @@ describe('v-intersect-line (auto-read)', () => {
     obs.fire(el, true)
     expect(autoReadSpy).not.toHaveBeenCalled()
 
-    // Scrolled into the band after the user has scrolled → fires.
+    // Scrolled into the band after the user has scrolled → fires. The store
+    // owns the full guard; the directive just passes viaScroll=true.
     reader.userHasScrolled = true
-    // Provide the live entry so the directive sees it as unread.
-    reader.entries = [entry]
     obs.fire(el, true)
-    expect(autoReadSpy).toHaveBeenCalledWith(42)
-  })
-
-  it('skips when auto-read is disabled for the feed', () => {
-    const reader = useReaderStore()
-    const feeds = useFeedsStore()
-    reader.viewMode = 'expanded'
-    reader.userHasScrolled = true
-    reader.entries = [entry]
-    feeds.disabledAutoReadFeeds = [7]
-    const autoReadSpy = vi.spyOn(reader, 'autoRead').mockResolvedValue({} as never)
-
-    const Wrapper = {
-      template: `<article v-intersect-line="{ entryId: 42, feedId: 7 }"></article>`,
-    }
-    const wrapper = mount(Wrapper, { global: { directives: globalDirectives } })
-    const el = wrapper.element
-
-    const obs = findObserver('-85%')
-    obs.fire(el, true)
-    obs.fire(el, true)
-    expect(autoReadSpy).not.toHaveBeenCalled()
+    expect(autoReadSpy).toHaveBeenCalledWith(42, true)
   })
 })
 

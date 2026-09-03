@@ -18,12 +18,10 @@ export function useKeyboard() {
     }
     if (evt.key === 'j' || evt.key === 'ArrowDown') {
       evt.preventDefault()
-      const id = reader.move(1)
-      if (id) reader.autoRead(id)
+      reader.moveAndRead(1)
     } else if (evt.key === 'k' || evt.key === 'ArrowUp') {
       evt.preventDefault()
-      const id = reader.move(-1)
-      if (id) reader.autoRead(id)
+      reader.moveAndRead(-1)
     } else if (evt.key === 'm') {
       if (reader.currentId) reader.toggleRead(reader.currentId)
     } else if (evt.key === 's') {

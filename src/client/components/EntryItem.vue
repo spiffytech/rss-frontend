@@ -17,9 +17,7 @@ const contentHtml = computed(() => lazyHtml(props.entry.content))
 function onCardClick(e: MouseEvent) {
   // Star / keep-unread buttons have their own semantics — don't double-fire.
   if ((e.target as HTMLElement).closest('button')) return
-  // Respect explicit "keep unread" (m key) — autoRead doesn't check this itself,
-  // it relies on the scroll directive to guard.
-  if (reader.keepUnreadIds.has(props.entry.id)) return
+  // autoRead owns the full guard (keep-unread included).
   reader.autoRead(props.entry.id)
 }
 </script>
