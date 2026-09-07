@@ -53,6 +53,21 @@ export function shouldAutoRead(opts: {
   )
 }
 
+/**
+ * Sweep guard: is the entry entirely above the auto-read band line (given in
+ * the same coordinate space as the rect)? A transition-only band observer
+ * misses crossings that complete between two of its evaluations (fast flicks,
+ * momentum scrolling) — an entry sitting entirely above the band has by
+ * definition been scrolled past, so the sweep can auto-read it regardless of
+ * whether the crossing was ever observed.
+ */
+export function isScrolledPast(
+  rect: TrackedRect,
+  bandY: number,
+): boolean {
+  return rect.bottom < bandY
+}
+
 /** Clamp a nav index into [0, length-1]; 0 when the list is empty. */
 export function clampNavIndex(index: number, length: number): number {
   if (length <= 0) return 0

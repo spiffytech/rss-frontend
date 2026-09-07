@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 
-import { pickTopmostVisible, shouldAutoRead, clampNavIndex } from './reading'
+import { pickTopmostVisible, shouldAutoRead, clampNavIndex, isScrolledPast } from './reading'
 
 describe('pickTopmostVisible', () => {
   test('picks the topmost visible entry', () => {
@@ -63,6 +63,31 @@ describe('shouldAutoRead', () => {
 
   test('blocks read entries', () => {
     expect(shouldAutoRead({ ...base, status: 'read' })).toBe(false)
+  })
+})
+
+describe('isScrolledPast', () => {
+  // Band line at 150 in these fixtures (e.g. 15% of a 1000px root).
+  const bandY = 150
+
+  test('entry entirely above the band has been scrolled past', () => {
+    expect(isScrolledPast({ top: -800, bottom: -20 }, bandY)).toBe(true)
+  })
+
+  test('entry straddling the band has not been passed', () => {
+    expect(isScrolledPast({ top: -100, bottom: 400 }, bandY)).toBe(false)
+  })
+
+  test('entry still below the band has not been reached', () => {
+    expect(isScrolledPast({ top: 200, bottom: 900 }, bandY)).toBe(false)
+  })
+
+  test('bottom edge touching the band line still counts as intersecting', () => {
+    expect(isScrolledPast({ top: -100, bottom: 150 }, bandY)).toBe(false)
+  })
+
+  test('zero-height entry just above the line has been passed', () => {
+    expect(isScrolledPast({ top: 149.9, bottom: 149.9 }, bandY)).toBe(true)
   })
 })
 
