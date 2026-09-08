@@ -38,6 +38,11 @@ export const useFeedsStore = defineStore('feeds', () => {
     feeds.value = panel.feeds
     categories.value = panel.categories
     counters.value = panel.counters
+    // Drop icon-failure flags for feeds that no longer exist.
+    const ids = new Set(panel.feeds.map((f) => f.id))
+    iconFailed.value = Object.fromEntries(
+      Object.entries(iconFailed.value).filter(([id]) => ids.has(Number(id))),
+    )
   }
 
   function applyFeedsCategories(panel: { feeds: MinifluxFeed[]; categories: MinifluxCategoryCount[] }) {

@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 
 import { useFeedsStore } from '@/client/stores/feeds'
 import { useReaderStore } from '@/client/stores/reader'
+import FeedIcon from '@/client/components/FeedIcon.vue'
 import type { MinifluxFeed } from '@/shared/types'
 
 const feeds = useFeedsStore()
@@ -44,8 +45,14 @@ function link(params: Record<string, string | number | null | undefined>): strin
   return s ? `/?${s}` : '/'
 }
 
-function navigate(href: string) {
-  router.push(href)
+/** Click a feed in the sidebar: re-clicking the active feed reloads page 1
+ *  (new items may have arrived since the list paginated); otherwise navigate. */
+function onClickFeed(feedId: number) {
+  if (isActiveFeed(feedId)) {
+    void reader.reloadView()
+  } else {
+    router.push(link({ feed: feedId }))
+  }
 }
 
 function isActiveFeed(feedId: number): boolean {
@@ -130,27 +137,13 @@ function showCategory(catId: number, catFeeds: MinifluxFeed[]): boolean {
           class="group flex items-center gap-x-2 text-sm"
           :class="{ hidden: feeds.hideEmptyFeeds && (feeds.counters[feed.id] ?? 0) === 0 && !isActiveFeed(feed.id) }"
         >
-          <span class="inline-flex items-center shrink-0 relative" aria-hidden="true">
-            <img
-              :src="`/api/miniflux/feeds/${feed.id}/icon`"
-              alt=""
-              class="w-5 h-5 rounded-sm"
-              loading="lazy"
-              @error="feeds.markIconFailed(feed.id)"
-            />
-            <span
-              v-if="feeds.iconFailed[feed.id]"
-              class="inline-flex items-center justify-center w-5 h-5 rounded-sm bg-gray-200 text-gray-600 text-xs font-semibold shrink-0"
-            >
-              {{ (feed.title.trim()[0] ?? '?').toUpperCase() }}
-            </span>
-          </span>
+          <FeedIcon :feed-id="feed.id" :title="feed.title" />
           <a
             v-if="!isRenamingFeed(feed.id)"
             :href="link({ feed: feed.id })"
             class="flex-1 min-w-0 flex items-center gap-x-2 py-2 rounded hover:bg-gray-100"
             :class="{ 'bg-gray-100': isActiveFeed(feed.id) }"
-            @click.prevent="navigate(link({ feed: feed.id }))"
+            @click.prevent="onClickFeed(feed.id)"
           >
             <span class="flex-1 truncate">{{ feed.title }}</span>
           </a>
@@ -260,27 +253,13 @@ function showCategory(catId: number, catFeeds: MinifluxFeed[]): boolean {
               class="group flex items-center gap-x-2 text-sm"
               :class="{ hidden: feeds.hideEmptyFeeds && (feeds.counters[feed.id] ?? 0) === 0 && !isActiveFeed(feed.id) }"
             >
-              <span class="inline-flex items-center shrink-0 relative" aria-hidden="true">
-                <img
-                  :src="`/api/miniflux/feeds/${feed.id}/icon`"
-                  alt=""
-                  class="w-5 h-5 rounded-sm"
-                  loading="lazy"
-                  @error="feeds.markIconFailed(feed.id)"
-                />
-                <span
-                  v-if="feeds.iconFailed[feed.id]"
-                  class="inline-flex items-center justify-center w-5 h-5 rounded-sm bg-gray-200 text-gray-600 text-xs font-semibold shrink-0"
-                >
-                  {{ (feed.title.trim()[0] ?? '?').toUpperCase() }}
-                </span>
-              </span>
+              <FeedIcon :feed-id="feed.id" :title="feed.title" />
               <a
                 v-if="!isRenamingFeed(feed.id)"
                 :href="link({ feed: feed.id })"
                 class="flex-1 min-w-0 flex items-center gap-x-2 py-2 rounded hover:bg-gray-100"
                 :class="{ 'bg-gray-100': isActiveFeed(feed.id) }"
-                @click.prevent="navigate(link({ feed: feed.id }))"
+            @click.prevent="onClickFeed(feed.id)"
               >
                 <span class="flex-1 truncate">{{ feed.title }}</span>
               </a>
