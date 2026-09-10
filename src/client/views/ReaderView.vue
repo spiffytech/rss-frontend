@@ -52,19 +52,23 @@ watch(
       next.search !== reader.filter.search
     ) {
       reader.setFilter(next)
-      // Jump to the top of the new feed — a page load used to do this for
-      // free; the SPA keeps the scroll container alive across nav.
-      resetScrollTop()
-      reader.loadView()
+      reader.reloadView()
     }
   },
 )
 
-// Reset the reading scroll container to the top (new feed/page load parity).
+// The reading scroll container (bound in the template).
 const scrollEl = ref<HTMLElement | null>(null)
-function resetScrollTop() {
-  if (scrollEl.value) scrollEl.value.scrollTop = 0
-}
+
+// Reset the reading scroll container to the top whenever the list is replaced
+// (applyPage bumps pageGen). Covers nav, re-clicking the active feed, mark-all-
+// read, and toolbar refresh — a fresh list should start at the top.
+watch(
+  () => reader.pageGen,
+  () => {
+    if (scrollEl.value) scrollEl.value.scrollTop = 0
+  },
+)
 
 // Scroll-into-view watcher for nav: one DOM effect for the whole app.
 // navigation is a state transition; only the actual scroll is geometry.

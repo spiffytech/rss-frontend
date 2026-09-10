@@ -269,7 +269,10 @@ export const useReaderStore = defineStore('reader', () => {
 
   async function checkTail() {
     if (checkingTail.value || loadingMore.value || hasMore.value) return
-    if (filter.value.search) return
+    // Search views: the two-phase cursor can't be rebuilt from one entry.
+    // Newest sort: fresh items surface at the top, not the tail — injecting
+    // there would trip the sweep path and auto-read them unseen.
+    if (filter.value.search || sort.value === 'newest') return
     const last = entries.value[entries.value.length - 1]
     if (!last) return
     checkingTail.value = true
@@ -294,6 +297,19 @@ export const useReaderStore = defineStore('reader', () => {
     } finally {
       checkingTail.value = false
     }
+  }
+
+  /**
+   * Sentinel trigger: paginate while pages remain, otherwise re-check the
+   * tail, so reaching the end of the list means everything the server has
+   * has been loaded (oldest sort; see checkTail's newest-sort skip).
+   */
+  async function loadEnd() {
+    if (hasMore.value) return loadMore()
+    await checkTail()
+    // checkTail may resume pagination while the sentinel is still on screen
+    // (IntersectionObserver won't re-fire without a crossing) — pull a page.
+    if (hasMore.value) await loadMore()
   }
 
   async function markAllRead() {
@@ -399,6 +415,7 @@ export const useReaderStore = defineStore('reader', () => {
     load,
     reloadView,
     loadMore,
+    loadEnd,
     checkTail,
     toggleRead,
     star,

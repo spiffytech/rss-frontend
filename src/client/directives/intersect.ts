@@ -19,7 +19,7 @@ export const vIntersect: Directive<HTMLElement, unknown> = {
       (entries) => {
         for (const entry of entries) {
           if (entry.isIntersecting) {
-            reader.loadMore()
+            reader.loadEnd()
           }
         }
       },

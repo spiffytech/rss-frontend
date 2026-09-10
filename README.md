@@ -64,7 +64,7 @@ The app is locked behind a sign-in using your Miniflux account. On login it vali
 - **Auto-read on scroll** — unread entries that scroll into view are marked read (expanded view).
 - **Keyboard shortcuts** — `j`/`k` prev/next, `m` toggle read, `s` star, `v` view mode, `Shift+A` mark all read.
 - **Navigation** — sidebar navigates via URL links carrying identity (`?feed=…&starred=1&search=…`); view/sort/hide-read-items are per-feed prefs (not URL state), restored per feed.
-- **Infinite scroll** — a sentinel fetches the next page when it scrolls into view.
+- **Infinite scroll** — a sentinel fetches the next page when it scrolls into view; once paginated out, the same sentinel rechecks the feed tail and auto-injects items that arrived since (oldest sort).
 - **PWA** — manifest + icons + a no-op service worker (satisfies installability).
 
 ## License

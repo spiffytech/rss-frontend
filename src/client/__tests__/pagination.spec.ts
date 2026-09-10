@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 
-const entriesMock = vi.fn()
+const entriesMock = vi.fn<() => Promise<unknown>>()
 
 vi.mock('@/client/api/reader', async (importOriginal) => {
   const mod = await importOriginal<typeof import('@/client/api/reader')>()
@@ -147,5 +147,59 @@ describe('checkTail', () => {
     reader.entries = [mk(1, 100)]
     await reader.checkTail()
     expect(entriesMock).not.toHaveBeenCalled()
+  })
+
+  it('skips newest sort (fresh items surface at the top, not the tail)', async () => {
+    const reader = useReaderStore()
+    reader.sort = 'newest'
+    reader.entries = [mk(1, 100)]
+    reader.seenIds = new Set([1])
+    reader.hasMore = false
+    await reader.checkTail()
+    expect(entriesMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('loadEnd', () => {
+  it('paginates while hasMore remains', async () => {
+    const reader = useReaderStore()
+    reader.entries = [mk(1, 100)]
+    reader.seenIds = new Set([1])
+    reader.nextCursor = 'c1'
+    reader.hasMore = true
+    entriesMock.mockResolvedValue({
+      entries: [mk(2, 90)],
+      nextCursor: 'c2',
+      hasMore: false,
+    })
+
+    await reader.loadEnd()
+
+    expect(entriesMock).toHaveBeenLastCalledWith(expect.anything(), 'c1')
+    expect(reader.entries.map((e) => e.id)).toEqual([1, 2])
+  })
+
+  it('rechecks the tail once paginated out, resuming pagination on fresh items', async () => {
+    const reader = useReaderStore()
+    reader.entries = [mk(1, 100)]
+    reader.seenIds = new Set([1])
+    reader.nextCursor = null
+    reader.hasMore = false
+    entriesMock
+      .mockResolvedValueOnce({ entries: [mk(9, 120)], nextCursor: 'x~5', hasMore: true })
+      .mockResolvedValueOnce({ entries: [mk(10, 140)], nextCursor: null, hasMore: false })
+
+    await reader.loadEnd()
+
+    // Tail check first, anchored at the loaded tail…
+    expect(entriesMock).toHaveBeenNthCalledWith(
+      1,
+      expect.anything(),
+      `${mk(1, 100).published_at}~1`,
+    )
+    // …then the resumed page pull from the adopted cursor.
+    expect(entriesMock).toHaveBeenNthCalledWith(2, expect.anything(), 'x~5')
+    expect(reader.entries.map((e) => e.id)).toEqual([1, 9, 10])
+    expect(reader.hasMore).toBe(false)
   })
 })

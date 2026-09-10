@@ -15,14 +15,15 @@ const reader = useReaderStore()
       :key="entry.id"
       :entry="entry"
     />
-    <!-- Infinite-scroll sentinel: v-intersect fires the loadMore when it
-         scrolls into view. The 100dvh bottom padding on the list container
-         ensures the last item can scroll all the way to the top of the
-         scroll container. -->
+    <!-- End-of-list sentinel: v-intersect fires loadEnd when it scrolls into
+         view — the next page while pagination remains, otherwise a tail
+         recheck that auto-injects items that arrived since we last paginated.
+         The 100dvh bottom padding on the list container ensures the last item
+         can scroll all the way to the top of the scroll container. -->
     <div
       id="entry-sentinel"
       class="h-1 w-full"
-      v-show="reader.hasMore && !reader.loadingMore"
+      v-show="!reader.loadingMore"
       v-intersect
     ></div>
   </div>
