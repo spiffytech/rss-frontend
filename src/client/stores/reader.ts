@@ -216,13 +216,20 @@ export const useReaderStore = defineStore('reader', () => {
   }
 
   /**
-   * Single guarded entry point for auto-read — every trigger (scroll band,
+   * Single guarded entry point for auto-read — every trigger (scroll sweep,
    * j/k/buttons, card click) funnels here so the guard list is identical
    * regardless of how the read was provoked. `viaScroll` marks the passive
    * scroll trigger, which still requires the user to have actually scrolled;
    * explicit triggers (key/button/click) are deliberate by definition.
+   * `ignoreFeedSetting` exempts the trigger from the per-feed
+   * mark-read-on-scroll setting (card click: opening an entry is explicit,
+   * the setting only governs passive marking).
    */
-  async function autoRead(id: number, viaScroll = false) {
+  async function autoRead(
+    id: number,
+    viaScroll = false,
+    opts: { ignoreFeedSetting?: boolean } = {},
+  ) {
     // Never auto-read during a search — scrolling/reading search results
     // shouldn't mark matches read.
     if (filter.value.search) return
@@ -237,6 +244,7 @@ export const useReaderStore = defineStore('reader', () => {
         feedId: entry.feed_id,
         entryId: id,
         status: entry.status,
+        ignoreFeedSetting: opts.ignoreFeedSetting,
       })
     ) {
       return

@@ -17,8 +17,10 @@ const contentHtml = computed(() => lazyHtml(props.entry.content))
 function onCardClick(e: MouseEvent) {
   // Star / keep-unread buttons have their own semantics — don't double-fire.
   if ((e.target as HTMLElement).closest('button')) return
-  // autoRead owns the full guard (keep-unread included).
-  reader.autoRead(props.entry.id)
+  // Clicking an entry is explicit: mark read even when mark-read-on-scroll
+  // is disabled for the feed. autoRead still owns the other guards
+  // (keep-unread included).
+  reader.autoRead(props.entry.id, false, { ignoreFeedSetting: true })
 }
 </script>
 

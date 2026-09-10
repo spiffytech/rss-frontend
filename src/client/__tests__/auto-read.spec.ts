@@ -89,6 +89,31 @@ describe('autoRead guard', () => {
     expect(reader.entries[0]!.status).toBe('unread')
   })
 
+  it('card click marks read even when the feed has auto-read disabled', async () => {
+    const reader = useReaderStore()
+    const feeds = useFeedsStore()
+    reader.entries = [mk()]
+    reader.viewMode = 'expanded'
+    feeds.disabledAutoReadFeeds = [7]
+
+    await reader.autoRead(42, false, { ignoreFeedSetting: true })
+
+    expect(reader.entries[0]!.status).toBe('read')
+  })
+
+  it('card click still respects keep-unread', async () => {
+    const reader = useReaderStore()
+    const feeds = useFeedsStore()
+    reader.entries = [mk()]
+    reader.viewMode = 'expanded'
+    feeds.disabledAutoReadFeeds = [7]
+    reader.keepUnreadIds = new Set([42])
+
+    await reader.autoRead(42, false, { ignoreFeedSetting: true })
+
+    expect(reader.entries[0]!.status).toBe('unread')
+  })
+
   it('blocks explicitly kept-unread entries on every trigger', async () => {
     const reader = useReaderStore()
     reader.entries = [mk()]

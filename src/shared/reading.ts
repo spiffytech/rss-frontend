@@ -43,29 +43,37 @@ export function shouldAutoRead(opts: {
   feedId: number
   entryId: number
   status: 'read' | 'unread'
+  /**
+   * Card clicks mark read even when the feed has mark-read-on-scroll
+   * disabled: the setting governs passive marking; an explicit click on the
+   * entry is a deliberate "I'm through with this".
+   */
+  ignoreFeedSetting?: boolean
 }): boolean {
   return (
     opts.viewMode === 'expanded' &&
     opts.userHasScrolled &&
-    !opts.disabledAutoReadFeeds.includes(opts.feedId) &&
+    (opts.ignoreFeedSetting || !opts.disabledAutoReadFeeds.includes(opts.feedId)) &&
     !opts.keepUnreadIds.includes(opts.entryId) &&
     opts.status === 'unread'
   )
 }
 
 /**
- * Sweep guard: is the entry entirely above the auto-read band line (given in
- * the same coordinate space as the rect)? A transition-only band observer
- * misses crossings that complete between two of its evaluations (fast flicks,
- * momentum scrolling) — an entry sitting entirely above the band has by
- * definition been scrolled past, so the sweep can auto-read it regardless of
- * whether the crossing was ever observed.
+ * Sweep guard: has the entry's top edge risen above the band line (given in
+ * the same coordinate space as the rect)? The trigger is absolute — every
+ * entry, short or tall, crosses the line after the same amount of scrolling
+ * (the distance from the root's bottom to the line), because the test is on
+ * the entry's top edge, not its bottom. A pure state test also can't miss
+ * the way transition observers can (mounts straddling the line, crossings
+ * completed between evaluations): whatever got the entry here, if its top
+ * is above the line the user scrolled it past.
  */
 export function isScrolledPast(
   rect: TrackedRect,
   bandY: number,
 ): boolean {
-  return rect.bottom < bandY
+  return rect.top < bandY
 }
 
 /** Clamp a nav index into [0, length-1]; 0 when the list is empty. */

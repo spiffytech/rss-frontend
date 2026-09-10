@@ -57,6 +57,22 @@ describe('shouldAutoRead', () => {
     expect(shouldAutoRead({ ...base, feedId: 9 })).toBe(false)
   })
 
+  test('ignoreFeedSetting overrides a disabled feed', () => {
+    expect(shouldAutoRead({ ...base, feedId: 9, ignoreFeedSetting: true })).toBe(true)
+  })
+
+  test('ignoreFeedSetting does not override the other guards', () => {
+    expect(
+      shouldAutoRead({ ...base, feedId: 9, ignoreFeedSetting: true, entryId: 77 }),
+    ).toBe(false)
+    expect(
+      shouldAutoRead({ ...base, feedId: 9, ignoreFeedSetting: true, status: 'read' }),
+    ).toBe(false)
+    expect(
+      shouldAutoRead({ ...base, feedId: 9, ignoreFeedSetting: true, viewMode: 'list' }),
+    ).toBe(false)
+  })
+
   test('blocks explicitly kept-unread entries', () => {
     expect(shouldAutoRead({ ...base, entryId: 77 })).toBe(false)
   })
@@ -70,24 +86,25 @@ describe('isScrolledPast', () => {
   // Band line at 150 in these fixtures (e.g. 15% of a 1000px root).
   const bandY = 150
 
-  test('entry entirely above the band has been scrolled past', () => {
+  test('entry whose top edge is above the line has been scrolled past', () => {
     expect(isScrolledPast({ top: -800, bottom: -20 }, bandY)).toBe(true)
   })
 
-  test('entry straddling the band has not been passed', () => {
-    expect(isScrolledPast({ top: -100, bottom: 400 }, bandY)).toBe(false)
+  test('entry fully above the line has been scrolled past', () => {
+    expect(isScrolledPast({ top: 20, bottom: 100 }, bandY)).toBe(true)
   })
 
-  test('entry still below the band has not been reached', () => {
+  test('tall entry whose top just crossed the line counts as passed', () => {
+    expect(isScrolledPast({ top: 149.9, bottom: 5000 }, bandY)).toBe(true)
+  })
+
+  test('entry with its top below the line has not been reached, however tall', () => {
     expect(isScrolledPast({ top: 200, bottom: 900 }, bandY)).toBe(false)
+    expect(isScrolledPast({ top: 151, bottom: 5000 }, bandY)).toBe(false)
   })
 
-  test('bottom edge touching the band line still counts as intersecting', () => {
-    expect(isScrolledPast({ top: -100, bottom: 150 }, bandY)).toBe(false)
-  })
-
-  test('zero-height entry just above the line has been passed', () => {
-    expect(isScrolledPast({ top: 149.9, bottom: 149.9 }, bandY)).toBe(true)
+  test('top edge exactly on the line is not yet past', () => {
+    expect(isScrolledPast({ top: 150, bottom: 400 }, bandY)).toBe(false)
   })
 })
 
