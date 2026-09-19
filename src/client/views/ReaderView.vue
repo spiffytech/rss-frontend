@@ -85,8 +85,12 @@ watch(
 // Mark userHasScrolled + end-of-list state on the entry-list scroll container.
 // atListEnd gates the idle-time tail recheck (see composables/polling.ts).
 function onListScroll() {
-  reader.userHasScrolled = true
   const el = scrollEl.value
+  // A scroll landing at scrollTop 0 is our own programmatic reset when a
+  // new page replaces the list (pageGen watcher) — not user intent. Without
+  // this, opening a feed arms the auto-read sweep and marks its first
+  // entry read.
+  if (el && el.scrollTop !== 0) reader.userHasScrolled = true
   if (el) reader.atListEnd = el.scrollTop + el.clientHeight >= el.scrollHeight - 200
 }
 </script>
