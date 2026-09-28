@@ -65,4 +65,26 @@ describe('lazyHtml', () => {
   test('leaves existing loading attribute alone', () => {
     expect(lazyHtml('<img loading="eager" src="x">')).toBe('<img loading="eager" src="x">')
   })
+
+  test('adds an aspect-ratio to iframe with width and height', () => {
+    expect(lazyHtml('<iframe width="560" height="315" src="x"></iframe>')).toBe(
+      '<iframe style="aspect-ratio:560 / 315;" loading="lazy" width="560" height="315" src="x"></iframe>',
+    )
+  })
+
+  test('merges aspect-ratio into an existing style attribute', () => {
+    expect(lazyHtml('<iframe style="border:0" width="560" height="315" src="x"></iframe>')).toBe(
+      '<iframe loading="lazy" style="aspect-ratio:560 / 315;border:0" width="560" height="315" src="x"></iframe>',
+    )
+  })
+
+  test('skips percentage widths (no ratio to derive)', () => {
+    expect(lazyHtml('<iframe width="100%" height="315" src="x"></iframe>')).toBe(
+      '<iframe loading="lazy" width="100%" height="315" src="x"></iframe>',
+    )
+  })
+
+  test('leaves an iframe without dimensions alone', () => {
+    expect(lazyHtml('<iframe src="x"></iframe>')).toBe('<iframe loading="lazy" src="x"></iframe>')
+  })
 })

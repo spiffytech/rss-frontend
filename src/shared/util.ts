@@ -54,12 +54,32 @@ export function domainOf(url: string): string {
 /**
  * Client-side post-processing of entry HTML: adds `loading="lazy"` to all
  * iframe and img elements so off-screen embeds don't render until scrolled
- * into view. Mirrors the old server-side lazyHtml (kept client-side now that
- * the API returns raw content).
+ * into view, and gives embeds an explicit aspect-ratio. An iframe has no
+ * intrinsic ratio, so `max-width: 100%` alone would shrink its width while
+ * leaving the height attribute fixed (a distorted embed); deriving the ratio
+ * from width/height makes the height scale with the width.
+ * Mirrors the old server-side lazyHtml (kept client-side now that the API
+ * returns raw content).
  */
 export function lazyHtml(html: string): string {
   // Only add loading="lazy" if not already present.
-  return html.replace(/<(iframe|img)(\s)(?![^>]*loading=)/gi, '<$1$2loading="lazy" ')
+  return html
+    .replace(/<(iframe|img)(\s)(?![^>]*loading=)/gi, '<$1$2loading="lazy" ')
+    .replace(/<iframe\b[^>]*>/gi, (tag) => {
+      // Numeric width/height only: percentage widths are already responsive and
+      // have no ratio to derive.
+      const w = tag.match(/\bwidth\s*=\s*["']?(\d+(?:\.\d+)?)(?![\d.%])/i)
+      const h = tag.match(/\bheight\s*=\s*["']?(\d+(?:\.\d+)?)(?![\d.%])/i)
+      if (!w || !h) return tag
+      const ratio = `${w[1]} / ${h[1]}`
+      if (/(\bstyle\s*=\s*)(["'])/i.test(tag)) {
+        return tag.replace(
+          /(\bstyle\s*=\s*)(["'])/i,
+          (_m, pre, quote) => `${pre}${quote}aspect-ratio:${ratio};`,
+        )
+      }
+      return tag.replace(/^<iframe\b/i, `<iframe style="aspect-ratio:${ratio};"`)
+    })
 }
 
 export type { EntriesFilter }

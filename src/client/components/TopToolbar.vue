@@ -22,7 +22,7 @@ async function onMarkAllRead() {
 </script>
 
 <template>
-  <header class="flex flex-nowrap items-center gap-x-2 px-2 py-2 border-b-2 border-line mb-2">
+  <header class="flex flex-nowrap items-center gap-x-2 min-w-0 px-2 py-2 border-b-2 border-line mb-2">
     <!-- Mobile hamburger: toggles the sidebar drawer -->
     <button
       type="button"

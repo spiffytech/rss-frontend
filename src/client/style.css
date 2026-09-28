@@ -77,6 +77,17 @@
     height: auto;
     border-radius: 0.25rem;
   }
+  /* Tailwind caps img/video but not the other replaced elements; without this a
+   * 560px iframe overflows the column and forces horizontal scrolling. */
+  .reading iframe,
+  .reading embed,
+  .reading object {
+    max-width: 100%;
+  }
+  /* Let the inline aspect-ratio (from lazyHtml) drive the height. */
+  .reading iframe {
+    height: auto;
+  }
   .reading pre {
     overflow-x: auto;
     padding: 0.75rem 1rem;
@@ -86,5 +97,25 @@
   }
   .reading code {
     font-size: 0.9em;
+  }
+
+  /* Toolbar chrome: one shell for the header's buttons (hamburger, prev/next,
+   * mark-all-read) so the touch target stays consistent. Utilities on the
+   * element itself still win — the utilities layer comes after this one. */
+  .toolbar-btn {
+    @apply shrink-0 min-h-11 px-3 inline-flex items-center justify-center
+      border border-line rounded-lg bg-white hover:bg-surface active:bg-line
+      leading-none cursor-pointer;
+  }
+
+  /* One action row in the feed popover: full width and at least 44px tall, which
+   * is the floor for a comfortable touch target (and what the settings grid needs
+   * to stay two columns wide on a 320px screen). A low-contrast fill with no
+   * border is deliberate — ten outlined rows would read as clutter (Refactoring
+   * UI, "Use fewer borders"), and the fill has to be permanent rather than a
+   * hover effect, since a touchscreen has no hover. */
+  .menu-row {
+    @apply w-full min-h-11 px-3 flex items-center gap-x-2 text-left rounded-lg
+      bg-gray-50 text-ink hover:bg-gray-100 active:bg-gray-200 cursor-pointer;
   }
 }
