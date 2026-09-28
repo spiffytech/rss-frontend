@@ -28,3 +28,6 @@ playwright-report/
 __screenshots__/
 
 .vscode
+
+# scratch/ops scripts (not app source)
+playground/

@@ -107,16 +107,26 @@ export const useFeedsStore = defineStore('feeds', () => {
     renameTitle.value = ''
   }
 
+  /**
+   * Rename a feed from anywhere. The sidebar's renameId/renameTitle editor state
+   * is deliberately untouched: the toolbar popover has its own field (the
+   * sidebar's editor only renders inside FeedPanel, i.e. behind a closed drawer
+   * on mobile), so both call this and neither can close the other's editor.
+   */
+  async function renameFeed(id: number, title: string) {
+    applyFeedsCategories(await api.renameFeed(id, title))
+  }
+
   async function saveRename() {
     const id = renameId.value
     const kind = renameKind.value
     const title = renameTitle.value.trim()
     if (id == null || kind == null || !title) return
-    const panel =
-      kind === 'feed'
-        ? await api.renameFeed(id, title)
-        : await api.renameCategory(id, title)
-    applyFeedsCategories(panel)
+    if (kind === 'feed') {
+      await renameFeed(id, title)
+    } else {
+      applyFeedsCategories(await api.renameCategory(id, title))
+    }
     cancelRename()
   }
 
@@ -161,6 +171,7 @@ export const useFeedsStore = defineStore('feeds', () => {
     startRename,
     cancelRename,
     saveRename,
+    renameFeed,
     toggleCollapsed,
     toggleHideEmptyFeeds,
     toggleAutoRead,
