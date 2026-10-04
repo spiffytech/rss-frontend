@@ -8,18 +8,15 @@ import { buildApp } from './app'
 const app = buildApp()
 
 if (process.env.NODE_ENV === 'production') {
-  // Serve the whole build: hashed JS/CSS under /assets/* (immutable) plus the
-  // public/ files Vite copied into dist/ (favicon, manifest, icons, sw.js).
-  // serveStatic falls through (404) when the path doesn't exist, so the SPA
-  // fallback below still catches client routes. The fallback index is served
-  // no-cache so a redeploy never serves a stale shell.
-  app.use('/assets/*', serveStatic({ root: './dist' }))
-  app.use('/favicon.svg', serveStatic({ root: './dist' }))
-  app.use('/favicon.ico', serveStatic({ root: './dist' }))
-  app.use('/manifest.webmanifest', serveStatic({ root: './dist' }))
-  app.use('/sw.js', serveStatic({ root: './dist' }))
-  app.use('/apple-touch-icon.png', serveStatic({ root: './dist' }))
-  app.use('/icon-*.png', serveStatic({ root: './dist' }))
+  // Serve everything in dist/: hashed assets under /assets/* plus the public/
+  // files Vite copied in (favicon, manifest, icons, sw.js). One catch-all
+  // serves any real file, so new public/ entries need no route here.
+  // serveStatic falls through when a path doesn't exist, so the SPA fallback
+  // below still catches client routes. Do NOT enumerate files with mid-path
+  // globs like '/icon-*.png': buildApp() registers param routes, which makes
+  // Hono pick TrieRouter, and TrieRouter only treats a *trailing* '*' as a
+  // wildcard — a mid-path one matches literally and the file 404s to the SPA.
+  app.use('*', serveStatic({ root: './dist' }))
   app.get('*', async (c) => c.html(await Bun.file('./dist/index.html').text()))
   const server = Bun.serve({
     port: Number(process.env.PORT) || 3000,
