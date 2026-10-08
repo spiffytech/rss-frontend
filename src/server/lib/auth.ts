@@ -106,15 +106,23 @@ export function readSession(ctx: Context): Session | null {
 }
 
 /** Set the session cookie on a response. Called on every authenticated request
- *  so both the cookie's maxAge and the signed `exp` slide forward with use. */
+ *  so both the cookie's maxAge and the signed `exp` slide forward with use.
+ *
+ *  `SameSite=Lax` rather than Strict: Strict is withheld on any cross-site
+ *  navigation, so arriving via a bookmark/shortcut/referrer after a browser
+ *  restart sends no cookie and the app renders "logged out". Lax still blocks
+ *  cross-site non-GET, which is what protects the mutating routes.
+ *  Both `maxAge` and `expires` are emitted so the cookie is unambiguously
+ *  persistent rather than a browser-session cookie. */
 export function writeSession(ctx: Context, session: Omit<Session, 'exp'>): void {
   const expires = Date.now() + SESSION_MAX_AGE * 1000
   setCookie(ctx, cookieName(), sign(JSON.stringify({ ...session, exp: expires })), {
     httpOnly: true,
-    sameSite: 'Strict',
+    sameSite: 'Lax',
     secure: loadConfig().sessionSecret != null,
     path: '/',
     maxAge: SESSION_MAX_AGE,
+    expires: new Date(expires),
   })
 }
 
@@ -122,9 +130,10 @@ export function writeSession(ctx: Context, session: Omit<Session, 'exp'>): void 
 export function clearSession(ctx: Context): void {
   setCookie(ctx, cookieName(), '', {
     httpOnly: true,
-    sameSite: 'Strict',
+    sameSite: 'Lax',
     secure: loadConfig().sessionSecret != null,
     path: '/',
     maxAge: 0,
+    expires: new Date(0),
   })
 }
