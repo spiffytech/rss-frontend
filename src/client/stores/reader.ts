@@ -39,6 +39,9 @@ export const useReaderStore = defineStore('reader', () => {
   const navRequest = ref<number | null>(null)
   // Client-only set of reader-session state (never crosses the API).
   const keepUnreadIds = ref(new Set<number>())
+  // List-view entries the user has clicked open (session-only). Expanded-view
+  // mode ignores this — every entry's content is shown there.
+  const expandedIds = ref(new Set<number>())
   const userHasScrolled = ref(false)
   // Bumped on every full list replacement (applyPage). v-track-top reads it to
   // re-arm its "skip the first observe" init guard per page, so navigating to a
@@ -104,6 +107,7 @@ export const useReaderStore = defineStore('reader', () => {
     navRequest.value = null
     userHasScrolled.value = false
     atListEnd.value = false
+    expandedIds.value = new Set()
     pageGen.value++
   }
 
@@ -228,7 +232,7 @@ export const useReaderStore = defineStore('reader', () => {
   async function autoRead(
     id: number,
     viaScroll = false,
-    opts: { ignoreFeedSetting?: boolean } = {},
+    opts: { ignoreFeedSetting?: boolean; explicit?: boolean } = {},
   ) {
     // Never auto-read during a search — scrolling/reading search results
     // shouldn't mark matches read.
@@ -245,11 +249,24 @@ export const useReaderStore = defineStore('reader', () => {
         entryId: id,
         status: entry.status,
         ignoreFeedSetting: opts.ignoreFeedSetting,
+        explicit: opts.explicit,
       })
     ) {
       return
     }
     applyStatusOptimistically(id, 'read')
+  }
+
+  /** Toggle list-view expansion for an entry; expanding marks it read. */
+  function toggleExpanded(id: number) {
+    const next = new Set(expandedIds.value)
+    if (next.has(id)) {
+      next.delete(id)
+    } else {
+      next.add(id)
+      void autoRead(id, false, { ignoreFeedSetting: true, explicit: true })
+    }
+    expandedIds.value = next
   }
 
   /** Star/bookmark toggle stays pessimistic: apply only on server truth. */
@@ -413,6 +430,7 @@ export const useReaderStore = defineStore('reader', () => {
     currentId,
     navRequest,
     keepUnreadIds,
+    expandedIds,
     userHasScrolled,
     pageGen,
     atListEnd,
@@ -426,6 +444,7 @@ export const useReaderStore = defineStore('reader', () => {
     loadEnd,
     checkTail,
     toggleRead,
+    toggleExpanded,
     star,
     autoRead,
     markAllRead,

@@ -49,9 +49,15 @@ export function shouldAutoRead(opts: {
    * entry is a deliberate "I'm through with this".
    */
   ignoreFeedSetting?: boolean
+  /**
+   * A direct human action (clicking the entry to expand it) reads even in
+   * list view, where collapsed content normally keeps auto-read off.
+   * Bypasses only the view-mode gate, not the keep-unread/feed guards.
+   */
+  explicit?: boolean
 }): boolean {
   return (
-    opts.viewMode === 'expanded' &&
+    (opts.explicit || opts.viewMode === 'expanded') &&
     opts.userHasScrolled &&
     (opts.ignoreFeedSetting || !opts.disabledAutoReadFeeds.includes(opts.feedId)) &&
     !opts.keepUnreadIds.includes(opts.entryId) &&

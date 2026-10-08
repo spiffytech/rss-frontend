@@ -73,6 +73,19 @@ describe('shouldAutoRead', () => {
     ).toBe(false)
   })
 
+  test('explicit reads an unread entry in list view', () => {
+    expect(shouldAutoRead({ ...base, viewMode: 'list', explicit: true })).toBe(true)
+  })
+
+  test('explicit does not override keep-unread or read status', () => {
+    expect(
+      shouldAutoRead({ ...base, viewMode: 'list', explicit: true, entryId: 77 }),
+    ).toBe(false)
+    expect(
+      shouldAutoRead({ ...base, viewMode: 'list', explicit: true, status: 'read' }),
+    ).toBe(false)
+  })
+
   test('blocks explicitly kept-unread entries', () => {
     expect(shouldAutoRead({ ...base, entryId: 77 })).toBe(false)
   })

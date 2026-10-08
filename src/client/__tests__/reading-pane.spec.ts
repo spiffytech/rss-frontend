@@ -139,9 +139,30 @@ describe('EntryItem', () => {
     expect(spy).toHaveBeenCalledWith(42)
   })
 
-  it('marks read on card click, exempt from the feed mark-read-on-scroll setting', async () => {
+  it('toggles expansion on card click and collapses on the second click', async () => {
     const reader = useReaderStore()
-    const autoReadSpy = vi.spyOn(reader, 'autoRead').mockResolvedValue({} as never)
+    reader.viewMode = 'list'
+
+    const wrapper = mount(EntryItem, {
+      props: { entry },
+      global: { directives: globalDirectives },
+    })
+
+    expect(wrapper.find('.reading').exists()).toBe(false)
+
+    await wrapper.find('article').trigger('click')
+    expect(reader.expandedIds.has(42)).toBe(true)
+    expect(wrapper.find('.reading').exists()).toBe(true)
+
+    await wrapper.find('article').trigger('click')
+    expect(reader.expandedIds.has(42)).toBe(false)
+    expect(wrapper.find('.reading').exists()).toBe(false)
+  })
+
+  it('marks a list-view entry read when expanded', async () => {
+    const reader = useReaderStore()
+    reader.viewMode = 'list'
+    reader.entries = [{ ...entry }]
 
     const wrapper = mount(EntryItem, {
       props: { entry },
@@ -149,7 +170,38 @@ describe('EntryItem', () => {
     })
 
     await wrapper.find('article').trigger('click')
-    expect(autoReadSpy).toHaveBeenCalledWith(42, false, { ignoreFeedSetting: true })
+    expect(reader.entries[0]?.status).toBe('read')
+  })
+
+  it('does not collapse when clicking inside the expanded body', async () => {
+    const reader = useReaderStore()
+    reader.viewMode = 'list'
+    reader.expandedIds = new Set([42])
+
+    const wrapper = mount(EntryItem, {
+      props: { entry },
+      global: { directives: globalDirectives },
+    })
+
+    expect(wrapper.find('.reading').exists()).toBe(true)
+    await wrapper.find('.reading').trigger('click')
+    expect(reader.expandedIds.has(42)).toBe(true)
+  })
+
+  it('opens the title link without toggling expansion, still marking read explicitly', async () => {
+    const reader = useReaderStore()
+    reader.viewMode = 'list'
+    const autoReadSpy = vi.spyOn(reader, 'autoRead').mockResolvedValue({} as never)
+
+    const wrapper = mount(EntryItem, {
+      props: { entry },
+      global: { directives: globalDirectives },
+    })
+
+    await wrapper.find('a.msubject').trigger('click')
+    expect(reader.expandedIds.has(42)).toBe(false)
+    expect(wrapper.find('.reading').exists()).toBe(false)
+    expect(autoReadSpy).toHaveBeenCalledWith(42, false, { ignoreFeedSetting: true, explicit: true })
   })
 })
 
