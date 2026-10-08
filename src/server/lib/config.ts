@@ -33,6 +33,12 @@ export interface Schedule {
   /** How far back to learn from published_at. Also the FIXED denominator of the
    *  no-weekday-signal rate -- do not shorten it to "catch up faster". */
   learningWindowDays: number
+  /**
+   * Half-life, in days, of the item-rate EMA. Smaller tracks a feed that
+   * changes pace faster; larger is smoother but slower to notice. 7 means a
+   * feed that goes from 4 to 30 items/day is ~87% caught up within a week.
+   */
+  rateHalfLifeDays: number
   /** Ceiling on the failing-feed probe backoff (1h doubling). */
   failingFeedMaxIntervalMinutes: number
   /** /health reports 503 once the last completed loop tick is older than this. */
@@ -55,6 +61,7 @@ const DEFAULT_MIN_INTERVAL_MINUTES = 5
 const DEFAULT_MAX_INTERVAL_MINUTES = 1440
 const DEFAULT_ENTRY_FREQUENCY_FACTOR = 1
 const DEFAULT_LEARNING_WINDOW_DAYS = 90
+const DEFAULT_RATE_HALF_LIFE_DAYS = 7
 const DEFAULT_FAILING_FEED_MAX_INTERVAL_MINUTES = 10080 // 7d
 const DEFAULT_MAX_TICK_AGE_MINUTES = 5
 
@@ -105,6 +112,7 @@ function loadSchedule(): Schedule {
     entryFrequencyFactor,
     maxPollsPerDay: MINUTES_PER_DAY / minIntervalMinutes,
     learningWindowDays: numEnv('SCHEDULER_LEARNING_WINDOW_DAYS', DEFAULT_LEARNING_WINDOW_DAYS),
+    rateHalfLifeDays: numEnv('SCHEDULER_RATE_HALF_LIFE_DAYS', DEFAULT_RATE_HALF_LIFE_DAYS),
     failingFeedMaxIntervalMinutes: numEnv(
       'SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES',
       DEFAULT_FAILING_FEED_MAX_INTERVAL_MINUTES,

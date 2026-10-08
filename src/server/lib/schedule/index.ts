@@ -32,6 +32,7 @@ import {
   buildFeedModel,
   decodeCacheHintMinutes,
   entryFrequencyIntervalMinutes,
+  epochDay,
   expandMinuteCounts,
   minuteOfDay,
   nextPollInstant,
@@ -145,6 +146,8 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
         entryFrequencyFactor: s.entryFrequencyFactor,
         maxPollsPerDay: s.maxPollsPerDay,
         learningWindowDays: s.learningWindowDays,
+        rateHalfLifeDays: s.rateHalfLifeDays,
+        nowEpochDay: epochDay(now),
       })
       if (model) built.set(feedId, model)
     }
@@ -156,7 +159,15 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
     const model = models.models.get(feed.id)
     const created = lastInserted.get(feed.id) ?? null
     const before = prev.get(feed.id)
-    const checkedAdvanced = feed.checkedAt != null && before?.checkedAt !== feed.checkedAt.getTime()
+    // `before == null` means the FIRST tick after a restart, which is
+    // indistinguishable from "checked_at advanced" if you only compare values --
+    // there is no previous value to compare against. Treating it as an advance
+    // decoded a cache hint out of OUR OWN next_check_at on every restart and
+    // then applied it as a floor, pushing polls hours out (measured: a feed with
+    // 65 polls/day had a 202-minute median latency). A restart is not evidence
+    // that Miniflux wrote anything, so it must not trigger a decode.
+    const checkedAdvanced =
+      before != null && feed.checkedAt != null && before.checkedAt !== feed.checkedAt.getTime()
     // A refresh that advanced checked_at but not created_at caught nothing:
     // that is the signal to retry inside the bell.
     const caughtNothing = checkedAdvanced && created != null && before?.lastCreated === created.getTime()

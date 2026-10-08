@@ -59,6 +59,13 @@ export interface ScheduleOptions {
    * no-weekday-signal rate — see the budget comment below.
    */
   learningWindowDays: number
+  /**
+   * SCHEDULER_RATE_HALF_LIFE_DAYS — how fast the item-rate EMA tracks a feed
+   * that changes pace. See {@link emaDailyCount}.
+   */
+  rateHalfLifeDays: number
+  /** UTC epoch-day of "today"; the EMA is anchored here. */
+  nowEpochDay: number
 }
 
 export interface FeedModel {
@@ -174,6 +181,40 @@ function quantile(sorted: number[], t: number): number {
   return (sorted[lo] as number) + (idx - lo) * ((sorted[hi] as number) - (sorted[lo] as number))
 }
 
+/**
+ * Exponentially weighted item rate, in items/day, over the learning window.
+ *
+ * This replaces a flat `N / learningWindowDays` average, which cannot follow a
+ * feed that changes pace: a feed averaging 3.6 items/day and then publishing
+ * 30/day still earned a budget of ~4 and missed items for hours.
+ *
+ * It is SAFER than the mean-gap formula it replaces, not merely different.
+ * That pathology derived a rate from GAPS — two entries five minutes apart
+ * make the denominator collapse and yield 288 items/day. A per-day count
+ * cannot be inflated by clustering: those two entries are 2 on one day, so the
+ * EMA sees 2. Clustering within a day is invisible to it by construction.
+ */
+export function emaDailyCount(
+  dayCounts: Map<number, number>,
+  nowEpochDay: number,
+  halfLifeDays: number,
+  learnDays: number,
+): number {
+  const alpha = 1 - Math.pow(2, -1 / Math.max(halfLifeDays, 0.1))
+  const decay = 1 - alpha
+  let ema = 0
+  // Oldest -> newest so today's sample carries weight alpha.
+  for (let k = learnDays - 1; k >= 0; k--) {
+    ema = ema * decay + (dayCounts.get(nowEpochDay - k) ?? 0) * alpha
+  }
+  // Normalise the truncated tail. The window cuts off the infinite series, so
+  // without this a constant rate r reads as r*(1 - decay^learnDays) — a silent
+  // underestimate whenever the window is not many half-lives long. With it, a
+  // steady feed reports exactly its rate for ANY half-life.
+  const mass = 1 - Math.pow(decay, learnDays)
+  return mass > 1e-9 ? ema / mass : ema
+}
+
 export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedModel | null {
   const stamps = input.stamps.filter((s) => s >= 0 && s < MINUTES_PER_DAY)
   const N = stamps.length
@@ -252,14 +293,19 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
   }
   const dowSignal = activeDays >= MIN_DOW_SAMPLES && publishDays.size > 0 && publishDays.size < 7
 
-  // Budget = items expected TODAY = perActiveDay x P(active today).
-  // With no weekday signal P = activeDays/learnDays, so the product collapses
-  // to N/learningWindowDays — a rate with a FIXED denominator (learnDays is the
-  // configured window, not a count of observed days). That is why there is no
-  // separate sparse-feed path: the sparse case is this expression in its
-  // low-data limit. A naive mean-gap formula would say 288 polls/day for a
-  // feed with 2 entries 5 minutes apart; this says 1.
-  const perActiveDay = N / Math.max(1, activeDays)
+  // Budget = items expected TODAY.
+  //
+  // The rate is an EMA of per-day entry counts (see emaDailyCount), not a flat
+  // window average, so it follows a feed that accelerates. `perActiveDay`
+  // scales it back to "per day it actually posts" so the weekday gate can
+  // spend it all on a publish day: with no weekday signal the two factors
+  // cancel and the budget is just the EMA itself.
+  const ratePerDay = emaDailyCount(input.dayCounts, opts.nowEpochDay, opts.rateHalfLifeDays, learnDays)
+  const perActiveDay = (ratePerDay * learnDays) / Math.max(1, activeDays)
+  // ceil() with an epsilon: the EMA is iterative float arithmetic, so a feed
+  // that is exactly N/day can compute as N+1e-12 and ceil() it up to N+1. The
+  // old flat formula was exact integer arithmetic and never hit this.
+  const CEIL_EPS = 1e-9
   // The floor must never exceed the ceiling: a date-only feed on an instance
   // configured for < 3 polls/day would otherwise get clamp(x, 3, 2) = 3 and
   // silently poll MORE often than the configured maximum.
@@ -269,7 +315,10 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
     const p = dowSignal ? (publishDays.has(d) ? 1 : 0) : activeDays / learnDays
     budget.push(
       clamp(
-        Math.max(Math.ceil(perActiveDay * p * opts.entryFrequencyFactor), p >= 1 ? numModes : 1),
+        Math.max(
+          Math.ceil(perActiveDay * p * opts.entryFrequencyFactor - CEIL_EPS),
+          p >= 1 ? numModes : 1,
+        ),
         floorPolls,
         opts.maxPollsPerDay,
       ),

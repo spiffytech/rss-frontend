@@ -25,6 +25,8 @@ const OPTS: ScheduleOptions = {
   entryFrequencyFactor: 1,
   maxPollsPerDay: 288,
   learningWindowDays: 90,
+  rateHalfLifeDays: 7,
+  nowEpochDay: 19089,
 }
 
 /** `days` consecutive epoch days starting at 19000. */
@@ -145,6 +147,54 @@ describe('buildFeedModel', () => {
   })
 })
 
+describe('rate EMA', () => {
+  test('follows a feed that accelerates — a flat window average could not', () => {
+    // Quiet at 4/day for 80 days, then 30/day for the last 10.
+    const dayCounts = new Map<number, number>()
+    for (let i = 0; i < 80; i++) dayCounts.set(day(i), 4)
+    for (let i = 80; i < 90; i++) dayCounts.set(day(i), 30)
+    const stamps = new Array<number>(620).fill(12 * 60)
+    const m = buildFeedModel(feed(stamps, dayCounts, 60), OPTS)
+    expect(m).not.toBeNull()
+    // Flat average would be (80*4 + 10*30)/90 = 6.2/day. The EMA is dominated by
+    // the recent 30/day and lands near 20 — the budget has to follow the pace
+    // or the items published today sit unread for hours.
+    expect(m!.budget[0]).toBeGreaterThan(15)
+  })
+
+  test('clustering cannot inflate the rate (the mean-gap pathology)', () => {
+    // Two entries five minutes apart on ONE day. Miniflux's
+    // (max-min)/(count-1) denominator collapses and yields 288 items/day.
+    const dayCounts = new Map<number, number>([[day(89), 2]])
+    const m = buildFeedModel(feed([600, 605], dayCounts, 5), OPTS)
+    expect(m).not.toBeNull()
+    expect(Math.max(...m!.budget)).toBeLessThanOrEqual(3)
+  })
+
+  test('a steady feed reports exactly its rate, for any half-life', () => {
+    // Guards the truncated-tail normalisation: without it a constant rate r
+    // reads as r*(1 - decay^learnDays) and silently understates the budget.
+    const dayCounts = new Map<number, number>()
+    for (let i = 0; i < 90; i++) dayCounts.set(day(i), 20)
+    const stamps = new Array<number>(1800).fill(12 * 60)
+    for (const hl of [1, 3, 7, 30, 200]) {
+      const m = buildFeedModel(feed(stamps, dayCounts, 60), { ...OPTS, rateHalfLifeDays: hl })
+      expect(m).not.toBeNull()
+      expect(m!.budget[0]).toBe(20)
+    }
+  })
+
+  test('a feed that goes quiet decays back to the floor', () => {
+    const dayCounts = new Map<number, number>()
+    for (let i = 0; i < 30; i++) dayCounts.set(day(i), 40) // busy month…
+    // …then nothing for the last 60 days
+    const stamps = new Array<number>(1200).fill(12 * 60)
+    const m = buildFeedModel(feed(stamps, dayCounts, 60), OPTS)
+    expect(m).not.toBeNull()
+    expect(m!.budget[0]).toBe(1)
+  })
+})
+
 describe('regressions', () => {
   test('minuteOfDay stays in 0..1439 for pre-1970 timestamps', () => {
     // JS `%` keeps the sign of the dividend, so a naive implementation returns
@@ -164,7 +214,7 @@ describe('regressions', () => {
     const stamps = new Array<number>(30).fill(0) // date-only: all midnight
     const dayCounts = new Map<number, number>()
     for (let i = 0; i < 30; i++) dayCounts.set(day(i), 1)
-    const opts: ScheduleOptions = { entryFrequencyFactor: 1, maxPollsPerDay: 2, learningWindowDays: 90 }
+    const opts: ScheduleOptions = { ...OPTS, maxPollsPerDay: 2 }
     const m = buildFeedModel(feed(stamps, dayCounts, 1440), opts)
     expect(m).not.toBeNull()
     expect(m!.dateOnly).toBe(true)
