@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.0 AS base
+FROM oven/bun:1.4.2 AS base
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # ---- builder: install full deps and build the Vue SPA (Vite emits hashed

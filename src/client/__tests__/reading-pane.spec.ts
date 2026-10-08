@@ -14,7 +14,8 @@ import type { MinifluxEntry } from '@/shared/types'
 class MockIntersectionObserver implements IntersectionObserver {
   static instances: MockIntersectionObserver[] = []
   readonly root: Element | Document | null = null
-  readonly rootMargin = '0px'
+  readonly rootMargin: string = '0px'
+  readonly scrollMargin: string = '0px'
   readonly thresholds: ReadonlyArray<number> = [0]
 
   constructor(
@@ -28,6 +29,9 @@ class MockIntersectionObserver implements IntersectionObserver {
   }
 
   observe() {}
+  takeRecords(): IntersectionObserverEntry[] {
+    return []
+  }
   unobserve() {}
   disconnect() {}
 
@@ -42,7 +46,7 @@ class MockIntersectionObserver implements IntersectionObserver {
         intersectionRatio: isIntersecting ? 1 : 0,
       },
     ]
-    this.cb(batch as unknown as IntersectionObserverEntry[], this)
+    this.cb(batch as unknown as IntersectionObserverEntry[], this as unknown as IntersectionObserver)
   }
 }
 

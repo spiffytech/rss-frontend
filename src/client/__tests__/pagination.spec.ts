@@ -13,7 +13,8 @@ vi.mock('@/client/api/reader', async (importOriginal) => {
     ...mod,
     createMinifluxReaderApi: () =>
       ({
-        entries: (...args: unknown[]) => entriesMock(...args),
+        entries: (...args: unknown[]) =>
+          (entriesMock as (...a: unknown[]) => unknown)(...args),
       }) as unknown as ReturnType<typeof mod.createMinifluxReaderApi>,
   }
 })

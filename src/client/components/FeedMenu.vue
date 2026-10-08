@@ -43,7 +43,7 @@ const isDesktop = useMediaQuery('(min-width: 48rem)')
 const { searchText, onSearchInput, clearSearch } = useSearch()
 
 const triggerEl = ref<HTMLButtonElement | null>(null)
-const panelEl = ref<HTMLDivElement | null>(null)
+const panelEl = ref<HTMLDialogElement | null>(null)
 const open = ref(false)
 
 const feedId = computed(() => reader.filter.feedId)

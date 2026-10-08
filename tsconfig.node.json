@@ -14,6 +14,10 @@
     "module": "preserve",
     "moduleResolution": "bundler",
 
+    // The configs import each other as `./vite.config.ts`. Harmless because
+    // nothing here is emitted (noEmit is on), but it needs this flag.
+    "allowImportingTsExtensions": true,
+
     // Include Node.js types and avoid accidentally including other `@types/*` packages.
     "types": ["node"],
 
