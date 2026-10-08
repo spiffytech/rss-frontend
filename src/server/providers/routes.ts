@@ -6,6 +6,28 @@
 // IMPORTANT: chained Hono expression only (no `const app + app.get`) so the
 // route schema survives into the return type — that powers the RPC client.
 
+/**
+ * MIME types we are willing to serve as feed icons.
+ *
+ * The icon's MIME is parsed out of a data URL whose origin is the favicon's own
+ * `Content-Type` response header, which a malicious feed controls. Serving that
+ * verbatim is stored XSS on the app origin: a feed can hand back a "favicon" of
+ * `text/html` and the browser will render it as a document on our origin.
+ *
+ * Raster formats only. `image/svg+xml` is deliberately excluded — SVG can carry
+ * script and executes when the resource is navigated to directly.
+ */
+const ALLOWED_ICON_MIME = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+  'image/avif',
+  'image/bmp',
+  'image/x-icon',
+  'image/vnd.microsoft.icon',
+])
+
 import { Hono } from 'hono'
 import type { MiddlewareHandler } from 'hono'
 import { zValidator } from '@hono/zod-validator'
@@ -290,9 +312,18 @@ export function createProviderRoutes(
         c.header('Cache-Control', 'private, max-age=3600, stale-while-revalidate=3600')
         return c.text('icon unavailable', 404)
       }
+      // Normalise away any parameters (`image/png; charset=...`) and reject
+      // anything outside the raster allowlist. `X-Content-Type-Options: nosniff`
+      // is the second line of defence: it stops the browser from second-guessing
+      // the type even if a bad value slipped through.
+      const mime = (declaredMime.split(';')[0] ?? '').trim().toLowerCase()
+      if (!ALLOWED_ICON_MIME.has(mime)) {
+        c.header('Cache-Control', 'private, max-age=3600, stale-while-revalidate=3600')
+        return c.text('icon unavailable', 404)
+      }
       const bytes = Buffer.from(base64, 'base64')
       c.header('Cache-Control', 'private, max-age=7200, stale-while-revalidate=604800')
-      return c.body(bytes, 200, { 'Content-Type': declaredMime })
+      return c.body(bytes, 200, { 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff' })
     })
 
     // ---- Preferences (204; client applies locally, no re-fetch) ----

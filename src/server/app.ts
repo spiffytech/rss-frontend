@@ -15,6 +15,7 @@ import { readSession, writeSession, clearSession } from './lib/auth'
 import { minifluxContext } from './lib/miniflux'
 import { requestContext } from './lib/request-context'
 import { loadConfig } from './lib/config'
+import { isTickStale } from './lib/schedule/heartbeat'
 import { minifluxProvider } from './providers/miniflux'
 import { createProviderRoutes } from './providers/routes'
 
@@ -79,14 +80,33 @@ export function buildApp() {
     .route('/api/miniflux', providerRoutes)
 
     // ---- Health (container healthcheck: probes the real SQLite prefs file) ----
+    // Intentionally UNAUTHENTICATED and intentionally inert: it is reachable
+    // from outside, so it returns no error text, no paths, no config, and it
+    // opens the database read-only (no file creation, no write lock). It is
+    // safe to expose precisely because there is nothing here to learn or to
+    // abuse — reaching for auth would only break external uptime probes.
     .get('/health', (c) => {
+      const cfg = loadConfig()
+      // Deliberately non-sensitive. This endpoint is unauthenticated, so the
+      // response carries no exception text, no filesystem paths and no config —
+      // a generic reason is all a probe needs. Opening the database READ-ONLY
+      // also removes two side effects the old probe had: `new Database(path)`
+      // silently CREATES the file when it is missing, and `BEGIN IMMEDIATE`
+      // takes the prefs write lock on every unauthenticated request (a trivial
+      // lock-contention vector). Read-only still fails on a corrupt or missing
+      // database, which is what we actually need to know.
       try {
-        const probe = new Database(loadConfig().prefsDbPath)
-        probe.run('PRAGMA busy_timeout = 5000')
-        probe.exec('BEGIN IMMEDIATE; ROLLBACK;')
+        const probe = new Database(cfg.prefsDbPath, { readonly: true })
         probe.close()
-      } catch (e) {
-        return c.json({ status: 'unhealthy', reason: String(e) }, 503)
+      } catch {
+        return c.json({ status: 'unhealthy', reason: 'prefs database unavailable' }, 503)
+      }
+      // The scheduler runs as a setInterval inside this process, so a silently
+      // stalled loop would otherwise pass this check forever while the instance
+      // quietly reverted to Miniflux's own entry_frequency. Only enforced once
+      // the scheduler is actually enabled, so a DB-less dev boot stays healthy.
+      if (isTickStale(cfg.schedule.maxTickAgeMinutes)) {
+        return c.json({ status: 'unhealthy', reason: 'scheduler tick is stale' }, 503)
       }
       return c.json({ status: 'ok' })
     })
