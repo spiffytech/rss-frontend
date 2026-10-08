@@ -4,8 +4,17 @@
 import { serveStatic } from 'hono/bun'
 
 import { buildApp } from './app'
+import { loadConfig } from './lib/config'
+import { startScheduler } from './lib/schedule'
 
+const config = loadConfig()
 const app = buildApp()
+
+// External feed scheduler: writes feeds.next_check_at in Miniflux's Postgres on
+// a 1-minute loop. Miniflux stays the fetcher/parser/store; we only move the
+// pointer. No-op (with a warning) when MINIFLUX_DATABASE_URL is unset, so a
+// `bun dev` without a database still boots.
+startScheduler(config.schedule)
 
 if (process.env.NODE_ENV === 'production') {
   // Serve everything in dist/: hashed assets under /assets/* plus the public/
