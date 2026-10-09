@@ -1,5 +1,5 @@
 // Feeds store: sidebar state (feeds/categories/counters) + account-wide user
-// prefs (hideEmptyFeeds, collapsedCats, disabledAutoReadFeeds) + rename editor
+// prefs (hideEmptyFeeds, disabledAutoReadFeeds) + rename editor
 // + icon fallback. Composition-style, immutable updates. Counts are the server's
 // truth via GET /counters (bootstrap, nav, bulk ops) plus local ±1 on single
 // toggles.
@@ -19,7 +19,6 @@ export const useFeedsStore = defineStore('feeds', () => {
 
   // Account-wide user prefs (server-side, per account).
   const hideEmptyFeeds = ref(true)
-  const collapsedCats = ref<Record<string, boolean>>({})
   const disabledAutoReadFeeds = ref<number[]>([])
 
   // Icon fallback: per-feed id -> true when the <img> errored.
@@ -81,11 +80,9 @@ export const useFeedsStore = defineStore('feeds', () => {
 
   function applyUserPrefs(prefs: {
     hideEmptyFeeds?: boolean
-    collapsedCats?: Record<string, boolean>
     disabledAutoReadFeeds?: number[]
   }) {
     if (prefs.hideEmptyFeeds != null) hideEmptyFeeds.value = prefs.hideEmptyFeeds
-    if (prefs.collapsedCats != null) collapsedCats.value = prefs.collapsedCats ?? {}
     if (prefs.disabledAutoReadFeeds != null) disabledAutoReadFeeds.value = prefs.disabledAutoReadFeeds
   }
 
@@ -132,11 +129,6 @@ export const useFeedsStore = defineStore('feeds', () => {
 
   // ---- Pref toggles (persist via 204 API; apply locally) ----
 
-  async function toggleCollapsed(catId: number) {
-    collapsedCats.value = { ...collapsedCats.value, [catId]: !collapsedCats.value[catId] }
-    await api.setCollapsedCats(collapsedCats.value)
-  }
-
   async function toggleHideEmptyFeeds() {
     hideEmptyFeeds.value = !hideEmptyFeeds.value
     await api.setHideEmptyFeeds(hideEmptyFeeds.value)
@@ -154,7 +146,6 @@ export const useFeedsStore = defineStore('feeds', () => {
     categories,
     counters,
     hideEmptyFeeds,
-    collapsedCats,
     disabledAutoReadFeeds,
     iconFailed,
     renameId,
@@ -172,7 +163,6 @@ export const useFeedsStore = defineStore('feeds', () => {
     cancelRename,
     saveRename,
     renameFeed,
-    toggleCollapsed,
     toggleHideEmptyFeeds,
     toggleAutoRead,
   }

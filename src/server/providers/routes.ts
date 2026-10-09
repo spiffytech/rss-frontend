@@ -382,17 +382,6 @@ export function createProviderRoutes(
     )
 
     .put(
-      '/prefs/collapsedCats',
-      zValidator('json', z.object({ collapsedCats: z.record(z.string(), z.boolean()) })),
-      async (c) => {
-        const body = c.req.valid('json')
-        const userId = deps.getUserId()
-        if (userId != null) saveUserPrefs(userId, { collapsedCats: body.collapsedCats })
-        return c.body(null, 204)
-      },
-    )
-
-    .put(
       '/prefs/autoRead',
       zValidator('json', z.object({ disabledAutoReadFeeds: z.array(z.number()) })),
       async (c) => {

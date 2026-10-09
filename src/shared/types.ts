@@ -55,7 +55,6 @@ export interface EntriesPage {
 
 export interface UserPrefs {
   hideEmptyFeeds?: boolean
-  collapsedCats?: Record<string, boolean>
   disabledAutoReadFeeds?: number[]
 }
 

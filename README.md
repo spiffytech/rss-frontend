@@ -24,7 +24,7 @@ prefsDbPath=./data/prefs.sqlite            # per-account pref store (SQLite)
 
 `prefsDbPath` defaults to `./data/prefs.sqlite` and holds per-account reader
 preferences (keyed by Miniflux user id): per-feed view defaults plus
-account-wide `hideEmptyFeeds`, collapsed categories, and disabled-auto-read
+account-wide `hideEmptyFeeds` and disabled-auto-read
 feeds. In Docker, point it at a persistent volume.
 
 ## Run

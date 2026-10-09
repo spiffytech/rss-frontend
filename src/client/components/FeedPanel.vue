@@ -103,7 +103,7 @@ function showCategory(catId: number, catFeeds: MinifluxFeed[]): boolean {
     class="border-r border-gray-200 pr-2 overflow-y-auto min-h-0"
   >
     <div class="mb-1">
-      <div class="font-semibold text-sm mb-1">Sections</div>
+      <h2 class="font-semibold text-sm mb-1">Sections</h2>
       <ul class="text-sm">
         <li>
           <a
@@ -128,7 +128,7 @@ function showCategory(catId: number, catFeeds: MinifluxFeed[]): boolean {
     </div>
 
     <div>
-      <div class="font-semibold text-sm mb-1">Feeds</div>
+      <h2 class="font-semibold text-sm mb-1">Feeds</h2>
 
       <ul v-if="uncategorized.length > 0">
         <li
@@ -196,16 +196,12 @@ function showCategory(catId: number, catFeeds: MinifluxFeed[]): boolean {
           v-show="showCategory(cat.id, feedsByCategory.get(cat.id) ?? [])"
         >
           <div class="group flex items-center gap-x-2 text-sm font-semibold">
-            <span class="shrink-0">{{ feeds.collapsedCats[cat.id] ? '▸' : '▾' }}</span>
-            <button
+            <h2
               v-if="!isRenamingCategory(cat.id)"
-              type="button"
-              class="flex-1 min-w-0 text-left py-2 rounded hover:bg-gray-100 flex items-center gap-x-2"
-              :aria-expanded="!feeds.collapsedCats[cat.id]"
-              @click="feeds.toggleCollapsed(cat.id)"
+              class="flex-1 min-w-0 text-sm font-semibold truncate py-2"
             >
-              <span class="truncate">{{ cat.title }}</span>
-            </button>
+              {{ cat.title }}
+            </h2>
             <!-- Inline rename editor (category). -->
             <span v-else class="flex flex-col flex-1 min-w-0 gap-1">
               <input
@@ -246,7 +242,7 @@ function showCategory(catId: number, catFeeds: MinifluxFeed[]): boolean {
               </button>
             </span>
           </div>
-          <ul v-show="!feeds.collapsedCats[cat.id]" class="ml-3">
+          <ul class="ml-3">
             <li
               v-for="feed in feedsByCategory.get(cat.id) ?? []"
               :key="feed.id"

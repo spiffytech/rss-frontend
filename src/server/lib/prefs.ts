@@ -2,7 +2,7 @@
  * Per-account reader preferences, stored in SQLite.
  *
  * Two scopes:
- *   - `user`     — account-wide: { hideEmptyFeeds, collapsedCats, disabledAutoReadFeeds }
+ *   - `user`     — account-wide: { hideEmptyFeeds, disabledAutoReadFeeds }
  *   - `feed:<id>` — per-feed view defaults: { viewMode, sort, hideReadItems }
  *
  * The global view/sort/hideReadItems defaults are intentionally hardcoded
@@ -17,7 +17,6 @@ import { loadConfig } from './config'
 
 export interface UserPrefs {
   hideEmptyFeeds?: boolean
-  collapsedCats?: Record<string, boolean>
   disabledAutoReadFeeds?: number[]
 }
 
@@ -85,15 +84,11 @@ function writeScope(userId: number, scope: string, prefs: Record<string, unknown
     .run(userId, scope, JSON.stringify(prefs))
 }
 
-/** Account-wide preferences (hideEmptyFeeds, collapsedCats, disabledAutoReadFeeds). */
+/** Account-wide preferences (hideEmptyFeeds, disabledAutoReadFeeds). */
 export function getUserPrefs(userId: number): UserPrefs {
   const raw = readScope(userId, 'user')
   return {
     hideEmptyFeeds: typeof raw.hideEmptyFeeds === 'boolean' ? raw.hideEmptyFeeds : undefined,
-    collapsedCats:
-      typeof raw.collapsedCats === 'object' && raw.collapsedCats !== null
-        ? (raw.collapsedCats as Record<string, boolean>)
-        : undefined,
     disabledAutoReadFeeds: Array.isArray(raw.disabledAutoReadFeeds)
       ? (raw.disabledAutoReadFeeds as number[])
       : undefined,

@@ -45,7 +45,6 @@ export interface ReaderApi {
   setSort(feedId: number | undefined, sort: 'oldest' | 'newest'): Promise<void>
   setHideReadItems(feedId: number | undefined, hideReadItems: boolean): Promise<void>
   setHideEmptyFeeds(hideEmptyFeeds: boolean): Promise<void>
-  setCollapsedCats(collapsedCats: Record<string, boolean>): Promise<void>
   setAutoRead(disabledAutoReadFeeds: number[]): Promise<void>
 }
 
@@ -148,10 +147,6 @@ export function createMinifluxReaderApi(): ReaderApi {
     async setHideEmptyFeeds(hideEmptyFeeds) {
       const res = await api.prefs.hideEmptyFeeds.$put({ json: { hideEmptyFeeds } })
       if (!res.ok) throw new Error(`hideEmptyFeeds failed: ${res.status}`)
-    },
-    async setCollapsedCats(collapsedCats) {
-      const res = await api.prefs.collapsedCats.$put({ json: { collapsedCats } })
-      if (!res.ok) throw new Error(`collapsedCats failed: ${res.status}`)
     },
     async setAutoRead(disabledAutoReadFeeds) {
       const res = await api.prefs.autoRead.$put({ json: { disabledAutoReadFeeds } })
