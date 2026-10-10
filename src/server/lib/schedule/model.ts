@@ -178,8 +178,10 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
   const toOrig = (v: number) => (((v + seamBin * BIN_MINUTES) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY
 
   // 48-bin density over rotated minutes, smoothed 3x with the circular
-  // [1,2,1]/4 kernel. densAt() rotates its query minute the same way, so this
-  // is equivalent to the sim's unrotated histogram plus a raw-minute lookup.
+  // [1,2,1]/4 kernel. Rotation keeps a mode that straddles midnight from being
+  // split in two by the day boundary; the smoothing is what the mode-counting
+  // below reads. Equivalent to the sim's unrotated histogram — the rotation is
+  // a rigid shift, so bin widths and peak ratios are unchanged.
   const dh = new Array<number>(DENSITY_BINS).fill(0)
   for (const s of stamps) {
     const bin = Math.floor((((s - seamBin * BIN_MINUTES) % MINUTES_PER_DAY + MINUTES_PER_DAY) % MINUTES_PER_DAY) / BIN_MINUTES)
