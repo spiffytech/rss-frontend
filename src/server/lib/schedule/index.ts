@@ -36,6 +36,7 @@ import {
   errorCapPollsPerDay,
   expandMinuteCounts,
   hostOf,
+  hostErrorMap,
   minuteOfDay,
   nextPollInstant,
   probeInterval,
@@ -144,12 +145,7 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
 
   // Worst consecutive-failure streak per host. Built once per tick from rows we
   // already hold — no extra query, no persistence.
-  const hostErrs = new Map<string, number>()
-  for (const feed of feeds) {
-    const h = hostOf(feed.url)
-    if (!h) continue
-    hostErrs.set(h, Math.max(hostErrs.get(h) ?? 0, feed.parsingErrorCount))
-  }
+  const hostErrs = hostErrorMap(feeds)
 
   let models = cache
   if (!models || now - models.builtAt > REBUILD_MS) {

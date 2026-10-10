@@ -431,6 +431,30 @@ export function hostOf(url: string): string {
 }
 
 /**
+ * Worst consecutive-failure streak per host, for host-level throttling.
+ *
+ * A single failing feed is a bad URL, not a sick origin, so it must NOT drag
+ * its neighbours down with it. Only propagate to the host once at least two
+ * feeds on it are failing at once -- that is what a 429 or an outage looks like
+ * from our side. (Measured before this rule: one broken feed on the operator's
+ * own twitter-rss host throttled a healthy feed to one poll per 14 hours.)
+ */
+export function hostErrorMap(
+  feeds: { url: string; parsingErrorCount: number }[],
+): Map<string, number> {
+  const worst = new Map<string, number>()
+  const failing = new Map<string, number>()
+  for (const f of feeds) {
+    const h = hostOf(f.url)
+    if (!h || f.parsingErrorCount <= 0) continue
+    failing.set(h, (failing.get(h) ?? 0) + 1)
+    worst.set(h, Math.max(worst.get(h) ?? 0, f.parsingErrorCount))
+  }
+  for (const [h, n] of failing) if (n < 2) worst.delete(h)
+  return worst
+}
+
+/**
  * How badly is this feed's ORIGIN failing? Errors throttle at both levels: the
  * feed's own streak, and the worst streak among all feeds sharing its host.
  * The host level is the important one — politeness is owed to the origin, not

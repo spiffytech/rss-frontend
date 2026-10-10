@@ -17,6 +17,7 @@ import {
   emaDailyCount,
   entryFrequencyIntervalMinutes,
   errorCapPollsPerDay,
+  hostErrorMap,
   hostOf,
   MINUTES_PER_DAY,
   minuteOfDay,
@@ -359,5 +360,28 @@ describe('politeness is owed to the host, not the subscription', () => {
     const hostErrs = new Map([['a.example', 1]])
     expect(worstErrorCount('https://a.example/x', 5, hostErrs)).toBe(5)
     expect(worstErrorCount('https://a.example/y', 0, hostErrs)).toBe(1)
+  })
+
+  test('one broken feed does not condemn its neighbours', () => {
+    // A bad URL is not a sick origin. Without this gate, a single broken feed on
+    // the operator's own twitter-rss host throttled a healthy feed to one poll
+    // per 14 hours.
+    const m = hostErrorMap([
+      { url: 'https://host.example/ok1', parsingErrorCount: 0 },
+      { url: 'https://host.example/broken', parsingErrorCount: 12 },
+    ])
+    expect(m.size).toBe(0)
+  })
+
+  test('two failing feeds on one host is a sick origin and propagates', () => {
+    const m = hostErrorMap([
+      { url: 'https://www.youtube.com/a', parsingErrorCount: 3 },
+      { url: 'https://www.youtube.com/b', parsingErrorCount: 4 },
+      { url: 'https://www.youtube.com/c', parsingErrorCount: 0 },
+      { url: 'https://lobste.rs/x', parsingErrorCount: 9 },
+    ])
+    expect(m.get('www.youtube.com')).toBe(4)
+    expect(m.has('lobste.rs')).toBe(false) // alone: per-feed throttle only
+    expect(worstErrorCount('https://www.youtube.com/c', 0, m)).toBe(4)
   })
 })
