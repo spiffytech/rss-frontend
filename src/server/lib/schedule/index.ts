@@ -62,7 +62,14 @@ interface ModelCache {
 }
 
 /** Per-feed facts carried between ticks. In-memory only: losing them on
- *  restart costs one cycle of re-detection, never correctness. */
+ *  restart costs one cycle of re-detection, never correctness.
+ *
+ *  TODO: eliminate this. Both this and `hints` survive only because we cannot
+ *  tell "Miniflux wrote next_check_at" from "we wrote it" from the row alone.
+ *  The checked_at gate is a proxy for that, and a proxy is exactly the kind of
+ *  thing that has broken four times already. The clean fix is a place to record
+ *  what we last wrote -- one tiny table, or a column -- so authorship is a fact
+ *  rather than an inference. Worth doing before this grows again. */
 const prev = new Map<number, number>()
 
 /** Decoded cache hints, keyed by feed and tagged with the checkedAt they were
@@ -182,16 +189,21 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
     // also trips parsing_error_count and so activates the probe branch below).
     if (checkedAdvanced && feed.checkedAt != null && currentNext != null) {
       const checkedMs = feed.checkedAt.getTime()
-      const entryIntervalMin = entryFrequencyIntervalMinutes(
+      const entry = entryFrequencyIntervalMinutes(
         weekly.get(feed.id) ?? 0,
         s.entryFrequencyFactor,
         s.minIntervalMinutes,
         s.maxIntervalMinutes,
       )
       const observedMin = (currentNext - checkedMs) / 60_000
+      // Miniflux caps its interval at maxInterval, so a gap LONGER than that
+      // cannot be its write — it is ours. Treat it as no hint rather than as a
+      // multi-day floor. This is the guard that makes the decoder safe to run
+      // at all; the checked_at gate narrows the window but cannot close it.
+      const ours = observedMin > s.maxIntervalMinutes + 3
       hints.set(feed.id, {
         checkedAt: checkedMs,
-        minutes: decodeCacheHintMinutes(observedMin, entryIntervalMin),
+        minutes: ours ? 0 : decodeCacheHintMinutes(observedMin, entry),
       })
     }
 
