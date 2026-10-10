@@ -24,18 +24,6 @@ const MIN_DOW_SAMPLES = 12 // weekday gate needs >= 12 DISTINCT active days to m
 // ---- placement ----
 const SINGLE_POLL_QUANTILE = 0.85
 
-// ---- retries ----
-const RETRY_SPREAD_DIVISOR = 8
-const RETRY_MIN_MINUTES = 5
-const RETRY_MAX_MINUTES = 30
-const RETRY_DENS_FLOOR = 0.15 // keep retrying while dens >= 15% of peak
-const MAX_RETRIES = 8
-const GRACE_CAP_SPREAD_MULT = 2
-const GRACE_CAP_MIN_MINUTES = 30
-const GRACE_CAP_MAX_MINUTES = 240
-const MED_GAP_RETRY_MIN_MINUTES = 6 * 60
-const MED_GAP_RETRY_MAX_MINUTES = 30 * 60
-
 export interface FeedInput {
   feedId: number
   /** Minute-of-day (0..1439) of every published entry in the window, with multiplicity. */
@@ -78,16 +66,8 @@ export interface FeedModel {
   medGapMinutes: number | null
   dowSignal: boolean
   publishDays: Set<number>
-  /** q95 - q05 of the rotated minutes; drives retry spacing and the grace cap. */
-  spreadMinutes: number
-  retryIntervalMinutes: number
-  graceCapMinutes: number
   /** Cached poll placement (minutes-of-day, ascending) for a weekday's budget. */
   pollMinutes(dow: number): number[]
-  /** Smoothed density at an original minute-of-day. */
-  densAt(minute: number): number
-  /** Whether retries are allowed at all for polls on this weekday. */
-  allowRetry(dow: number): boolean
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x))
@@ -323,23 +303,7 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
     return uniq
   }
 
-  // Spread of the rotated minutes (q95 - q05) drives retry spacing and the
-  // grace cap — same formulas as the sim's reference config (retryDiv=8,
-  // minRetry=5, maxRetry=30, graceCapH=4).
-  const spreadMinutes = quantile(rot, 0.95) - quantile(rot, 0.05)
-  const retryIntervalMinutes = clamp(spreadMinutes / RETRY_SPREAD_DIVISOR, RETRY_MIN_MINUTES, RETRY_MAX_MINUTES)
-  const graceCapMinutes = clamp(
-    GRACE_CAP_SPREAD_MULT * spreadMinutes,
-    GRACE_CAP_MIN_MINUTES,
-    GRACE_CAP_MAX_MINUTES,
-  )
-
   const medGapMinutes = input.medGapMinutes
-  const allowRetry = (dow: number): boolean =>
-    concentrated &&
-    medGapMinutes != null &&
-    medGapMinutes >= MED_GAP_RETRY_MIN_MINUTES &&
-    (medGapMinutes <= MED_GAP_RETRY_MAX_MINUTES || (dowSignal && publishDays.has(dow)))
 
   return {
     feedId: input.feedId,
@@ -351,15 +315,7 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
     medGapMinutes,
     dowSignal,
     publishDays,
-    spreadMinutes,
-    retryIntervalMinutes,
-    graceCapMinutes,
     pollMinutes,
-    densAt: (minute: number) => {
-      const rotMinute = (((minute - seamBin * BIN_MINUTES) % MINUTES_PER_DAY) + MINUTES_PER_DAY) % MINUTES_PER_DAY
-      return dens[Math.floor(rotMinute / BIN_MINUTES)] ?? 0
-    },
-    allowRetry,
   }
 }
 
@@ -455,40 +411,4 @@ export function nextPollInstant(
     }
   }
   return null
-}
-
-/**
- * Extra poll offsets (minutes after the anchor poll) to run when the anchor
- * poll caught nothing. Pure: the runtime filters the chain to instants still
- * in the future and stops it once an entry shows up.
- *
- * Retry while we are still inside a bell (dens >= 15% of peak), at most 8
- * times, never past min(nextScheduledPoll - anchor, graceCap). The boundary to
- * the next scheduled poll wraps to tomorrow's first poll.
- */
-export function retryOffsets(model: FeedModel, anchorMinute: number, dow: number): number[] {
-  if (!model.allowRetry(dow)) return []
-  const pts = model.pollMinutes(dow)
-  if (pts.length === 0) return []
-  const first = pts.find((m) => m > anchorMinute)
-  // The boundary is TOMORROW's first poll, which differs from today's whenever
-  // the budget varies by weekday (dowSignal). Using today's pts[0] truncates
-  // the retry window early on such feeds.
-  const nextDayFirst = model.pollMinutes((dow + 1) % 7)[0]
-  const toNext =
-    first !== undefined
-      ? first - anchorMinute
-      : (nextDayFirst ?? (pts[0] as number)) + MINUTES_PER_DAY - anchorMinute
-  const maxElapsed = Math.min(toNext, model.graceCapMinutes)
-  const out: number[] = []
-  let o = model.retryIntervalMinutes
-  while (
-    out.length < MAX_RETRIES &&
-    o <= maxElapsed &&
-    model.densAt(anchorMinute + o) >= RETRY_DENS_FLOOR * model.peak
-  ) {
-    out.push(o)
-    o += model.retryIntervalMinutes
-  }
-  return out
 }

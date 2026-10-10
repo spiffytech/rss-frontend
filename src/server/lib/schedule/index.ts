@@ -19,7 +19,6 @@ import {
   acquireSchedulerLock,
   applyTargets,
   fetchFeeds,
-  fetchLastInsertedAt,
   fetchLearnAggregates,
   fetchWeeklyEntryCounts,
   openDb,
@@ -34,10 +33,8 @@ import {
   entryFrequencyIntervalMinutes,
   epochDay,
   expandMinuteCounts,
-  minuteOfDay,
   nextPollInstant,
   resolveTarget,
-  retryOffsets,
   type FeedInput,
   type FeedModel,
 } from './model'
@@ -66,7 +63,7 @@ interface ModelCache {
 
 /** Per-feed facts carried between ticks. In-memory only: losing them on
  *  restart costs one cycle of re-detection, never correctness. */
-const prev = new Map<number, { checkedAt: number | null; lastCreated: number | null }>()
+const prev = new Map<number, number>()
 
 /** Decoded cache hints, keyed by feed and tagged with the checkedAt they were
  *  decoded from so a later fetch invalidates them. */
@@ -134,7 +131,6 @@ function toInputs(agg: LearnAggregates): Map<number, FeedInput> {
 async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<ModelCache> {
   const now = Date.now()
   const feeds = await fetchFeeds(sql)
-  const lastInserted = await fetchLastInsertedAt(sql)
   const weekly = await fetchWeeklyEntryCounts(sql)
 
   let models = cache
@@ -158,7 +154,6 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
   const writes: TargetWrite[] = []
   for (const feed of feeds) {
     const model = models.models.get(feed.id)
-    const created = lastInserted.get(feed.id) ?? null
     const before = prev.get(feed.id)
     // `before == null` means the FIRST tick after a restart, which is
     // indistinguishable from "checked_at advanced" if you only compare values --
@@ -168,14 +163,8 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
     // 65 polls/day had a 202-minute median latency). A restart is not evidence
     // that Miniflux wrote anything, so it must not trigger a decode.
     const checkedAdvanced =
-      before != null && feed.checkedAt != null && before.checkedAt !== feed.checkedAt.getTime()
-    // A refresh that advanced checked_at but not created_at caught nothing:
-    // that is the signal to retry inside the bell.
-    const caughtNothing = checkedAdvanced && created != null && before?.lastCreated === created.getTime()
-    prev.set(feed.id, {
-      checkedAt: feed.checkedAt?.getTime() ?? null,
-      lastCreated: created?.getTime() ?? null,
-    })
+      before !== undefined && feed.checkedAt != null && before !== feed.checkedAt.getTime()
+    if (feed.checkedAt != null) prev.set(feed.id, feed.checkedAt.getTime())
 
     const currentNext = feed.nextCheckAt?.getTime() ?? null
 
@@ -256,13 +245,6 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
       // nothing.
       const next = nextPollInstant(model, now)
       targetMs = next ? next.getTime() : staleBoundMs
-      if (caughtNothing && feed.checkedAt != null) {
-        // The anchor for a retry is the FETCH that caught nothing (checkedAt),
-        // not the tick that noticed it.
-        const checkedMs = feed.checkedAt.getTime()
-        const offset = retryOffsets(model, minuteOfDay(checkedMs), feed.checkedAt.getUTCDay())[0]
-        if (offset !== undefined) targetMs = Math.min(targetMs, anchorMs + offset * 60_000)
-      }
     }
 
     // Staleness ceiling: never later than maxInterval since the last REAL check,

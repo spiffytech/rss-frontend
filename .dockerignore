@@ -5,3 +5,8 @@
 **/*.sqlite
 **/*.sqlite-shm
 **/*.sqlite-wal
+
+# Scratch/debris: never ship tooling logs or one-off import dumps in the image.
+.pi-submarine-*.log
+**/*.tsbuildinfo
+bazqux-*.xml

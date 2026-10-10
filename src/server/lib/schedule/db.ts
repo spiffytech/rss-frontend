@@ -171,21 +171,6 @@ export async function fetchWeeklyEntryCounts(sql: SQL): Promise<Map<number, numb
 }
 
 /**
- * Last insert time per feed — the runtime's "did the last poll catch nothing?"
- * signal: Miniflux stamps created_at at insert time, so a fetch at T caught
- * something iff an entry exists with created_at >= T. (created_at is only
- * import-corrupted for old rows, which read as "caught nothing" — harmless.)
- */
-export async function fetchLastInsertedAt(sql: SQL): Promise<Map<number, Date>> {
-  const rows = await sql.unsafe<{ feed_id: number; last_created: Date | string }[]>(
-    `SELECT feed_id, max(created_at) AS last_created
-       FROM entries
-      GROUP BY 1`,
-  )
-  return new Map(rows.map((r) => [Number(r.feed_id), new Date(r.last_created)]))
-}
-
-/**
  * Session-level advisory lock proving this process is the only scheduler. The
  * compare-and-swap on checked_at is NOT mutual exclusion — neither writer
  * changes checked_at, so two replicas both win the CAS and overwrite each other
@@ -195,7 +180,6 @@ export async function fetchLastInsertedAt(sql: SQL): Promise<Map<number, Date>> 
  * Returns true when acquired, false when another scheduler already holds it.
  */
 export async function acquireSchedulerLock(sql: SQL): Promise<boolean> {
-  // Arbitrary but stable constant namespace + key.
   const rows = await sql.unsafe<{ locked: boolean }[]>(
     `SELECT pg_try_advisory_lock(726401339, 1) AS locked`,
   )

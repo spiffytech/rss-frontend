@@ -29,9 +29,15 @@ Consequences, accepted:
 ## Budget
 
 ```
-B_today = clamp( ceil( itemsPerActiveDay × P(active today) × SCHEDULER_BUDGET_FACTOR ),
-                 minPollsPerDay, maxPollsPerDay )
+B_today = clamp( ceil( itemsPerActiveDay × P(active today) × SCHEDULER_ENTRY_FREQUENCY_FACTOR ),
+                 floorPollsPerDay, maxPollsPerDay )
 ```
+
+- `floorPollsPerDay` is `min(3 | 1, maxPollsPerDay)` — 3 for a date-only feed, 1
+  otherwise. It is a constant, not an env var. The floor must never exceed the
+  ceiling: `clamp(x, 3, 2)` would silently return 3 and poll a date-only feed
+  MORE often than `SCHEDULER_ENTRY_FREQUENCY_MIN_INTERVAL` allows.
+- `maxPollsPerDay` = 1440 / `SCHEDULER_ENTRY_FREQUENCY_MIN_INTERVAL`.
 
 - `P(active today)` = 1 / 0 when a weekday signal exists, else the observed
   frequency of active days.
@@ -64,7 +70,12 @@ Read from the **same** env vars Miniflux reads, so the two cannot drift:
 | derived | from |
 |---|---|
 | `maxPollsPerDay` = 1440 / minIntervalMinutes | `SCHEDULER_ENTRY_FREQUENCY_MIN_INTERVAL` |
-| `minPollsPerDay` = 1440 / maxIntervalMinutes | `SCHEDULER_ENTRY_FREQUENCY_MAX_INTERVAL` |
+| (floor is a constant, see above) | — |
+| learning window | `SCHEDULER_LEARNING_WINDOW_DAYS` (default 90) |
+| EMA half-life | `SCHEDULER_RATE_HALF_LIFE_DAYS` (default 7) |
+| `/health` staleness threshold | `SCHEDULER_MAX_TICK_AGE_MINUTES` (default 5) |
+| failing-feed probe ceiling | `SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES` (default 10080 = 7d) |
+| item-rate multiplier | `SCHEDULER_ENTRY_FREQUENCY_FACTOR` |
 
 Declared once in `compose.yml` and interpolated into both services. Overridable
 via `MINIFLUX_MIN_INTERVAL_MINUTES`, `MINIFLUX_MAX_INTERVAL_MINUTES`,
@@ -127,7 +138,7 @@ learned model**, where there is no schedule to protect:
 ```
 probeInterval = clamp( 1h × 2^(min(parsing_error_count, 8) − 1),
                        SCHEDULER_ENTRY_FREQUENCY_MIN_INTERVAL,
-                       SCHEDULER_FAILING_FEED_MAX_INTERVAL )
+                       SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES )
 ```
 
 That setting binds only on the unmodelled path; for a modelled feed the
@@ -246,7 +257,7 @@ feed set**, not on the whole instance.
 
 - Drifting publication times (~11h mean) — a learned time-of-day cannot track a
   moving one.
-- Wide-spread daily feeds (~2.5h) — raise `SCHEDULER_BUDGET_FACTOR` to 2 to
+- Wide-spread daily feeds (~2.5h) — raise `SCHEDULER_ENTRY_FREQUENCY_FACTOR` to 2 to
   halve this at ~2× polls.
 - Date-only `published_at` (~5h) — no time-of-day signal exists.
 - Sparse/unpredictable feeds sit at the 24h floor by design.
