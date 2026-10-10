@@ -425,109 +425,25 @@ export function decodeCacheHintMinutes(
   return Math.max(0, observedMinutes - entryIntervalMinutes)
 }
 
-/** Host portion of a feed URL — the unit politeness is actually measured at. */
-export function hostOf(url: string): string {
-  return /^https?:\/\/([^/]+)/i.exec(url)?.[1]?.toLowerCase() ?? ''
-}
-
-/**
- * Worst consecutive-failure streak per host, for host-level throttling.
- *
- * A single failing feed is a bad URL, not a sick origin, so it must NOT drag
- * its neighbours down with it. Only propagate to the host once at least two
- * feeds on it are failing at once -- that is what a 429 or an outage looks like
- * from our side. (Measured before this rule: one broken feed on the operator's
- * own twitter-rss host throttled a healthy feed to one poll per 14 hours.)
- */
-export function hostErrorMap(
-  feeds: { url: string; parsingErrorCount: number }[],
-): Map<string, number> {
-  const worst = new Map<string, number>()
-  const failing = new Map<string, number>()
-  for (const f of feeds) {
-    const h = hostOf(f.url)
-    if (!h || f.parsingErrorCount <= 0) continue
-    failing.set(h, (failing.get(h) ?? 0) + 1)
-    worst.set(h, Math.max(worst.get(h) ?? 0, f.parsingErrorCount))
-  }
-  for (const [h, n] of failing) if (n < 2) worst.delete(h)
-  return worst
-}
-
-/**
- * How badly is this feed's ORIGIN failing? Errors throttle at both levels: the
- * feed's own streak, and the worst streak among all feeds sharing its host.
- * The host level is the important one — politeness is owed to the origin, not
- * to our subscription. Without it, 61 YouTube feeds each look polite in
- * isolation while the host sees 27 fetches in 10 minutes.
- */
-export function worstErrorCount(
-  url: string,
-  parsingErrorCount: number,
-  hostErrs: Map<string, number>,
-): number {
-  return Math.max(parsingErrorCount, hostErrs.get(hostOf(url)) ?? 0)
-}
-
 /**
  * Earliest scheduled poll instant strictly after `afterMs`, scanning UTC day
  * offsets 0..maxDayOffset and each poll minute of that day's budget.
- *
- * `maxPollsPerDay` thins the day's bells by a whole-number STRIDE (every k-th
- * bell) rather than re-placing them, so a throttled feed keeps the timing we
- * learned instead of falling back to an arbitrary probe time. Striding the
- * sorted bells naturally spreads what is left across the day.
  */
 export function nextPollInstant(
   model: FeedModel,
   afterMs: number,
   maxDayOffset = 7,
-  maxPollsPerDay?: number,
 ): Date | null {
   const base = epochDay(afterMs) * MS_PER_DAY
   for (let off = 0; off <= maxDayOffset; off++) {
     const dayStart = base + off * MS_PER_DAY
     const dow = new Date(dayStart).getUTCDay()
-    const pts = model.pollMinutes(dow)
-    const stride =
-      maxPollsPerDay != null && maxPollsPerDay > 0
-        ? Math.max(1, Math.ceil(pts.length / maxPollsPerDay))
-        : 1
-    for (let i = 0; i < pts.length; i += stride) {
-      const t = dayStart + (pts[i] as number) * 60_000
+    for (const m of model.pollMinutes(dow)) {
+      const t = dayStart + m * 60_000
       if (t > afterMs) return new Date(t)
     }
   }
   return null
-}
-
-/**
- * Most polls per day a feed may use once it starts failing. Errors should
- * LIMIT the learned schedule, not replace it: replacing it dropped Hacker News
- * from 57 polls/day to one every two hours on a single transient failure, even
- * while it was still producing entries.
- */
-export function errorCapPollsPerDay(
-  errorCount: number,
-  factor: number,
-  minIntervalMinutes: number,
-  maxIntervalMinutes: number,
-  failingFeedMaxIntervalMinutes: number,
-): number {
-  const interval = probeInterval(errorCount, factor, minIntervalMinutes, maxIntervalMinutes, failingFeedMaxIntervalMinutes)
-  return Math.max(1, Math.floor(MINUTES_PER_DAY / interval))
-}
-
-/** Shared with the scheduler loop so both agree on the backoff curve. */
-export function probeInterval(
-  errorCount: number,
-  _factor: number,
-  minIntervalMinutes: number,
-  _maxIntervalMinutes: number,
-  failingFeedMaxIntervalMinutes: number,
-): number {
-  const exponent = Math.min(Math.max(errorCount, 1), 8) - 1
-  return Math.min(Math.max(60 * 2 ** exponent, minIntervalMinutes), failingFeedMaxIntervalMinutes)
 }
 
 /**

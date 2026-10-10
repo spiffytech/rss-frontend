@@ -16,13 +16,9 @@ import {
   decodeCacheHintMinutes,
   emaDailyCount,
   entryFrequencyIntervalMinutes,
-  errorCapPollsPerDay,
-  hostErrorMap,
-  hostOf,
   MINUTES_PER_DAY,
   minuteOfDay,
   nextPollInstant,
-  worstErrorCount,
   type FeedInput,
   type ScheduleOptions,
 } from './model'
@@ -280,108 +276,35 @@ describe('cache-hint decode', () => {
   })
 })
 
-describe('errors limit the schedule, they do not replace it', () => {
-  const wideFeed = () => {
+describe('errors never throttle a learned schedule', () => {
+  test('a flaky feed keeps every one of its bells', () => {
+    // This is the whole policy. Errors were tried as a hard probe, a per-feed
+    // cap and a per-host cap; all three were net-harmful. The only feed we could
+    // measure (hnrss.org, HTTP 502 waves) still delivered 56 items/day, and
+    // throttling it to 3 polls/day produced a 277-minute median. A 502 is the
+    // server failing, not the server asking us to slow down.
     const stamps: number[] = []
     const dayCounts = new Map<number, number>()
     for (let i = 0; i < 90; i++) {
       for (let k = 0; k < 40; k++) stamps.push(Math.floor((k * MINUTES_PER_DAY) / 40))
       dayCounts.set(day(i), 40)
     }
-    return buildFeedModel(feed(stamps, dayCounts, 20), OPTS)!
-  }
+    const m = buildFeedModel(feed(stamps, dayCounts, 20), OPTS)!
+    const dayStart = 19089 * 86_400_000
+    const learned = m.pollMinutes(new Date(dayStart).getUTCDay())
+    expect(learned.length).toBe(40)
 
-  /** Every poll instant of the UTC day containing `dayStart`, honouring `cap`. */
-  const pollsOnDay = (m: ReturnType<typeof buildFeedModel>, dayStart: number, cap?: number) => {
-    const out: number[] = []
+    const collected: number[] = []
     let cursor = dayStart - 1
     const end = dayStart + MINUTES_PER_DAY * 60_000
     for (let i = 0; i < 500; i++) {
-      const n = nextPollInstant(m!, cursor, 1, cap)
+      const n = nextPollInstant(m, cursor)
       if (!n || n.getTime() >= end) break
-      out.push(n.getTime())
+      collected.push(n.getTime())
       cursor = n.getTime()
     }
-    return out
-  }
-
-  const MS_PER_DAY = 86_400_000
-  test('a cap thins the bells by stride instead of discarding the schedule', () => {
-    const m = wideFeed()
-    const dayStart = 19089 * MS_PER_DAY
-    expect(pollsOnDay(m, dayStart).length).toBe(40)
-    // 40 bells capped at 12 -> stride ceil(40/12)=4 -> 10 bells, still spread.
-    const thinned = pollsOnDay(m, dayStart, 12)
-    expect(thinned.length).toBe(10)
-    expect(thinned.length).toBeLessThan(40)
-    expect(thinned.length).toBeGreaterThan(1)
-  })
-
-  test('the strided bells are drawn from the learned set, not re-placed', () => {
-    const m = wideFeed()
-    const dayStart = 19089 * MS_PER_DAY
-    const learned = new Set(m.pollMinutes(new Date(dayStart).getUTCDay()).map((x) => x))
-    for (const t of pollsOnDay(m, dayStart, 12)) {
-      const minute = (t - dayStart) / 60_000
-      expect(learned.has(minute)).toBe(true)
-    }
-  })
-
-  test('each consecutive failure halves the allowance and floors at one', () => {
-    const cap = (n: number) => errorCapPollsPerDay(n, 1, 5, 1440, 10080)
-    expect(cap(1)).toBe(24) // 60m probe
-    expect(cap(2)).toBe(12) // 120m
-    expect(cap(3)).toBe(6) // 240m
-    expect(cap(4)).toBe(3) // 480m
-    expect(cap(5)).toBe(1) // 960m
-    expect(cap(20)).toBe(1) // clamped at 8 doublings
-  })
-})
-
-describe('politeness is owed to the host, not the subscription', () => {
-  test('hostOf extracts the origin, case-insensitively', () => {
-    expect(hostOf('https://www.youtube.com/feeds/videos.xml?playlist_id=UU1')).toBe('www.youtube.com')
-    expect(hostOf('http://www.questionablecontent.net/QCRSS.xml')).toBe('www.questionablecontent.net')
-    expect(hostOf('HTTPS://Example.COM/x')).toBe('example.com')
-    expect(hostOf('not-a-url')).toBe('')
-  })
-
-  test('a healthy feed on a failing host is throttled with its neighbours', () => {
-    // This is the YouTube case: 61 feeds each looked polite in isolation while
-    // the host saw 27 fetches in 10 minutes.
-    const hostErrs = new Map([['www.youtube.com', 3]])
-    expect(worstErrorCount('https://www.youtube.com/feeds/a', 0, hostErrs)).toBe(3)
-    expect(worstErrorCount('https://www.youtube.com/feeds/b', 0, hostErrs)).toBe(3)
-    // …and a feed on an unrelated host is untouched.
-    expect(worstErrorCount('https://example.com/x', 0, hostErrs)).toBe(0)
-  })
-
-  test('the worse of the two streaks wins', () => {
-    const hostErrs = new Map([['a.example', 1]])
-    expect(worstErrorCount('https://a.example/x', 5, hostErrs)).toBe(5)
-    expect(worstErrorCount('https://a.example/y', 0, hostErrs)).toBe(1)
-  })
-
-  test('one broken feed does not condemn its neighbours', () => {
-    // A bad URL is not a sick origin. Without this gate, a single broken feed on
-    // the operator's own twitter-rss host throttled a healthy feed to one poll
-    // per 14 hours.
-    const m = hostErrorMap([
-      { url: 'https://host.example/ok1', parsingErrorCount: 0 },
-      { url: 'https://host.example/broken', parsingErrorCount: 12 },
-    ])
-    expect(m.size).toBe(0)
-  })
-
-  test('two failing feeds on one host is a sick origin and propagates', () => {
-    const m = hostErrorMap([
-      { url: 'https://www.youtube.com/a', parsingErrorCount: 3 },
-      { url: 'https://www.youtube.com/b', parsingErrorCount: 4 },
-      { url: 'https://www.youtube.com/c', parsingErrorCount: 0 },
-      { url: 'https://lobste.rs/x', parsingErrorCount: 9 },
-    ])
-    expect(m.get('www.youtube.com')).toBe(4)
-    expect(m.has('lobste.rs')).toBe(false) // alone: per-feed throttle only
-    expect(worstErrorCount('https://www.youtube.com/c', 0, m)).toBe(4)
+    // Every bell survives regardless of parsing_error_count -- errors are not
+    // an input to nextPollInstant at all.
+    expect(collected.length).toBe(40)
   })
 })
