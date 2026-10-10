@@ -36,6 +36,7 @@ import {
   expandMinuteCounts,
   minuteOfDay,
   nextPollInstant,
+  resolveTarget,
   retryOffsets,
   type FeedInput,
   type FeedModel,
@@ -264,25 +265,22 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
       }
     }
 
-    // Staleness: never later than maxInterval since the last ACTUAL check. When
-    // the bound is already past the feed is OVERDUE, and the target must be
-    // allowed to land in the past too — Miniflux selects on
-    // `next_check_at < now()`, so nudging an overdue target forward makes it
-    // never due at all.
-    // Staleness applies to HEALTHY feeds only. For a failing feed the probe
-    // backoff is the politeness mechanism and must be allowed to reach
-    // SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES; capping it at maxInterval
-    // made that setting dead and probed broken feeds once a day regardless.
-    // Staleness ceiling: never later than maxInterval since the last REAL
-    // check. Superseded only by the probe backoff on an unmodelled feed, where
+    // Staleness ceiling: never later than maxInterval since the last REAL check,
+    // spread per-feed so feeds fetched together do not all come due together.
+    // Superseded only on the unmodelled probe path, where
     // SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES is the binding cap.
     const probed = !model && feed.parsingErrorCount > 0
     if (!probed) targetMs = Math.min(targetMs, staleBoundMs)
 
+    // The origin's Retry-After / cache floor. Decoded only on the tick where
+    // checked_at advanced — the one moment this value is provably Miniflux's.
     const hint = hints.get(feed.id)
-    if (hint != null && hint.checkedAt === anchorMs) {
-      targetMs = Math.max(targetMs, anchorMs + hint.minutes * 60_000)
-    }
+    const hintFloorMs =
+      hint != null && hint.checkedAt === anchorMs ? anchorMs + hint.minutes * 60_000 : undefined
+
+    // Never postpone a target we already committed to; the origin's Retry-After
+    // is the one thing allowed to push back. See resolveTarget.
+    targetMs = resolveTarget(targetMs, currentNext, checkedAdvanced, hintFloorMs)
 
     if (currentNext != null && Math.abs(targetMs - currentNext) <= TOLERANCE_MS) continue
     writes.push({ id: feed.id, target: new Date(targetMs), expectedCheckedAt: feed.checkedAtText })

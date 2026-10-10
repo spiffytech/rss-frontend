@@ -19,6 +19,7 @@ import {
   MINUTES_PER_DAY,
   minuteOfDay,
   nextPollInstant,
+  resolveTarget,
   type FeedInput,
   type ScheduleOptions,
 } from './model'
@@ -251,28 +252,72 @@ describe('cache-hint decode', () => {
   })
 
   test('round-trips a Retry-After hint through Miniflux\'s write formula', () => {
-    // A 429 with Retry-After: 120 min, on a feed that publishes 397/week
-    // (entry interval ~25 min). Miniflux writes max(25.4, 120) = 120.
-    const observed = minifluxWrites(397, 120)
+    // Miniflux writes interval = min(max(entry, refreshDelay), Max). When the
+    // hint is the larger term, the gap it writes IS the hint -- do not subtract
+    // the entry interval back out of it.
+    const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440) // ~25.4m
+    const observed = minifluxWrites(397, 120) // max(25.4, 120) = 120
     expect(observed).toBe(120)
-    const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
-    expect(decodeCacheHintMinutes(observed, entry)).toBeCloseTo(120 - 25.4, 1)
+    // The full 120 minutes must survive. Trimming by `entry` here means we
+    // come back at +94.6m and poll 25 minutes before Retry-After allowed.
+    expect(decodeCacheHintMinutes(observed, entry)).toBe(120)
   })
 
-  test('reports no hint when entry frequency alone explains the interval', () => {
-    const observed = minifluxWrites(397, 0) // no cache headers at all
+  test('reports no hint when entry frequency alone explains the gap', () => {
     const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
+    const observed = minifluxWrites(397, 0) // = entry
     expect(decodeCacheHintMinutes(observed, entry)).toBe(0)
   })
 
-  test('never returns a negative hint when the hint was capped by maxInterval', () => {
-    // refreshDelay huge -> Miniflux caps at maxInterval; the decode understates
-    // the true hint but must never go negative (it is applied as a floor).
-    const observed = minifluxWrites(397, 100000)
-    expect(observed).toBe(1440)
+  test('a hint below the entry interval cannot be recovered and must read as none', () => {
+    // min(max(entry, refreshDelay), Max) collapses to `entry` whenever the hint
+    // is the smaller term, so 0 and entry are indistinguishable in the DB. The
+    // decode must read that as "no hint" rather than invent one.
     const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
-    expect(decodeCacheHintMinutes(observed, entry)).toBeGreaterThan(0)
-    expect(decodeCacheHintMinutes(observed, entry)).toBeLessThanOrEqual(1440 - entry)
+    expect(decodeCacheHintMinutes(entry, entry)).toBe(0)
+    expect(decodeCacheHintMinutes(entry - 5, entry)).toBe(0)
+  })
+
+  test('a hint pinned at the max interval still floors at the max interval', () => {
+    // refreshDelay huge -> Miniflux caps at MaxInterval = 1440.
+    const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
+    const observed = minifluxWrites(397, 100000) // min(max(25.4, 100000), 1440)
+    expect(observed).toBe(1440)
+    expect(decodeCacheHintMinutes(observed, entry)).toBe(1440)
+  })
+})
+
+describe('a committed target is never postponed', () => {
+  test('a pending retry survives the next tick instead of being clobbered', () => {
+    // The retry chain is written on the tick where checked_at advances. The
+    // next tick recomputes the strictly-future bell and used to rewrite over
+    // it, so a 5-30min retry never fired against a bell hours away.
+    const retry = 1000
+    const nextBell = 1000 + 3 * 60 * 60 * 1000
+    expect(resolveTarget(nextBell, retry, false)).toBe(retry)
+  })
+
+  test('an overdue target stays overdue instead of sliding to the next bell', () => {
+    // A target that expired before Miniflux's batch consumed it must remain
+    // due now, not be raised to a future bell ("never due at all").
+    const overdue = 1000
+    const nextBell = 1000 + 3 * 60 * 60 * 1000
+    expect(resolveTarget(nextBell, overdue, false)).toBe(overdue)
+    expect(resolveTarget(nextBell, overdue, false)).toBeLessThan(Date.now())
+  })
+
+  test('right after a fetch, Miniflux\'s default is replaced by our bell', () => {
+    // On that tick `currentNext` is Miniflux's entry-frequency default, not our
+    // plan -- keeping it would pin a sparse feed to Miniflux's rate.
+    const minifluxDefault = 1000 + 25 * 60 * 1000
+    const ourBell = 1000 + 6 * 60 * 60 * 1000
+    expect(resolveTarget(ourBell, minifluxDefault, true)).toBe(ourBell)
+  })
+
+  test('a Retry-After floor is allowed to raise a target', () => {
+    // The origin asking us to wait is the one thing that may override the
+    // never-postpone rule.
+    expect(resolveTarget(1000, 500, false, 5000)).toBe(5000)
   })
 })
 

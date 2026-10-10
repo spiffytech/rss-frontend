@@ -409,20 +409,61 @@ export function entryFrequencyIntervalMinutes(
 }
 
 /**
- * Recover Miniflux's cache hint from what it wrote. Miniflux persists
- * `interval = min(max(entryInterval, refreshDelay), maxInterval)`, so the hint
- * is whatever the observed interval exceeds the entry-frequency interval by.
- * Returns 0 when entry frequency alone explains the observed interval.
+ * Recover Miniflux's cache hint from what it wrote.
  *
- * This is only sound to call on the tick where `checked_at` advanced: that is
- * the one moment when `next_check_at` is provably Miniflux's and not our own
- * previous write.
+ * Miniflux persists `interval = min(max(entryInterval, refreshDelay), maxInterval)`,
+ * and its two clock readings STRADDLE the fetch — so `observed` also contains the
+ * fetch duration. Combining the two:
+ *
+ *   refreshDelay <= entry  ->  observed == entry (+fetch)      -> no hint
+ *   refreshDelay >  entry  ->  observed == refreshDelay (+fetch) -> hint = observed
+ *
+ * So the hint is the whole observed gap, never `observed - entry`: subtracting
+ * under-honours a Retry-After by exactly one entry interval. Slack absorbs the
+ * fetch duration; anything at or below `entry` is genuinely indistinguishable
+ * from no hint at all (the max() collapsed it) and must read as none.
+ *
+ * Only sound to call on the tick where `checked_at` advanced: that is the one
+ * moment when `next_check_at` is provably Miniflux's and not our own previous
+ * write.
  */
+const HINT_SLACK_MINUTES = 3 // fetch time is inside the observed gap
+
 export function decodeCacheHintMinutes(
   observedMinutes: number,
   entryIntervalMinutes: number,
 ): number {
-  return Math.max(0, observedMinutes - entryIntervalMinutes)
+  return observedMinutes > entryIntervalMinutes + HINT_SLACK_MINUTES ? observedMinutes : 0
+}
+
+/**
+ * A target we already committed to is replaced only by an EARLIER one.
+ *
+ * Two failures come from not doing this:
+ *   - a retry target (checkedAt + 5..30min) gets rewritten to the next bell one
+ *     tick later, so the retry chain never fires;
+ *   - a target that expired before Miniflux's batch consumed it is raised to
+ *     the following bell — "never due at all", the exact failure the staleness
+ *     rule exists to prevent.
+ *
+ * `justFetched` is the one exception: on that tick `currentNextMs` is Miniflux's
+ * own freshly-written entry-frequency default rather than our plan, so it has
+ * to be replaceable — otherwise a sparse feed is pinned to Miniflux's rate
+ * instead of its learned bell.
+ *
+ * `hintFloorMs` is the origin's Retry-After / cache floor: the one thing allowed
+ * to push a target back out.
+ */
+export function resolveTarget(
+  candidateMs: number,
+  currentNextMs: number | null,
+  justFetched: boolean,
+  hintFloorMs?: number,
+): number {
+  let t = candidateMs
+  if (!justFetched && currentNextMs != null) t = Math.min(t, currentNextMs)
+  if (hintFloorMs != null) t = Math.max(t, hintFloorMs)
+  return t
 }
 
 /**
