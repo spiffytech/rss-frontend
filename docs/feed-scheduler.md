@@ -35,9 +35,21 @@ B_today = clamp( ceil( itemsPerActiveDay × P(active today) × SCHEDULER_BUDGET_
 
 - `P(active today)` = 1 / 0 when a weekday signal exists, else the observed
   frequency of active days.
-- With no day signal the product collapses to `N / learningWindow` — a rate with
-  a **fixed** denominator. That is why there is no separate "sparse fallback"
-  path; the sparse case is this expression in its low-data limit.
+- `itemsPerActiveDay` is an **exponentially weighted** item rate (half-life
+  `SCHEDULER_RATE_HALF_LIFE_DAYS`, default 7d), scaled back to per-active-day
+  by `learnDays / activeDays`. With no day signal the product collapses to the
+  EMA itself.
+
+  The rate is deliberately NOT `N / learningWindow`. A flat window average
+  cannot follow a feed that changes pace: one running 3.6 items/day and then
+  publishing 30/day keeps a budget of ~4 for the rest of the window, and items
+  sit unread for hours. The EMA reaches the new rate within a few days. It is
+  normalised by `1 − decay^learnDays` so a steady feed reports exactly its rate
+  at any half-life, not `rate × (1 − decay^learnDays)`.
+
+  This is SAFER than the mean-gap formula it replaces, not merely different:
+  clustering cannot inflate it either, because a per-day count is insensitive
+  to within-day spacing.
 
 Miniflux's own `weeklyCount` is `ceil(604800 / mean_gap)` where
 `mean_gap = (max − min) / (count − 1)`. The denominator is the data's own span,
@@ -101,28 +113,16 @@ bug pushed a feed 42 hours out before it was caught.
 
 ## Errors and backoff
 
-**Miniflux has no backoff for ordinary errors.** `RefreshFeed` calls
-`CheckedNow()` and `ScheduleNextCheck(weeklyEntryCount, 0)` *before* fetching;
-the failure path (`UpdateFeedError`) then writes that already-computed
-`next_check_at`. So a broken feed is retried at exactly its entry-frequency
-interval — 5 minutes for anything that merely looks high-volume — until it
-trips the error limit. **The one exception is HTTP 429**, where `Retry-After`
-is honoured (see Cache hints above).
+**Errors do not throttle a learned schedule.** They were tried in three shapes —
+a hard probe interval, a per-feed cap, and a per-host cap — and every one was
+net-harmful. The one measurable case (hnrss.org, which returns **502** in waves
+while still delivering 56 items/day) went from full bells to 3 polls/day and
+paid a 277-minute median for it.
 
-Two consequences:
-
-- **`POLLING_PARSING_ERROR_LIMIT` is purely an eligibility filter.**
-  `storage/batch.go` adds `parsing_error_count < limit` to the job query, so a
-  feed at the limit is never polled again and no amount of writing
-  `next_check_at` rescues it. Set it to `0` and `WithErrorLimit` adds no clause
-  at all — every feed stays eligible forever.
-- **We must supply the backoff ourselves.** With the limit at 0 and no Miniflux
-  backoff, a failing feed would otherwise be hammered at its entry-frequency
-  interval indefinitely.
-
-`parsing_error_count` is already a free streak counter: `model/feed.go`
-increments it on every failure and zeroes it on success, and nothing else
-mutates it. Use it as the backoff exponent — no extra state:
+A 502 is the server *failing*, not the server asking us to slow down. Backing
+off buys no politeness there — only latency, plus a delay in noticing the
+recovery. Error backoff therefore applies in exactly one place: **feeds with no
+learned model**, where there is no schedule to protect:
 
 ```
 probeInterval = clamp( 1h × 2^(min(parsing_error_count, 8) − 1),
@@ -130,13 +130,62 @@ probeInterval = clamp( 1h × 2^(min(parsing_error_count, 8) − 1),
                        SCHEDULER_FAILING_FEED_MAX_INTERVAL )
 ```
 
-The floor is the *minimum* interval, not the entry-frequency interval: a feed
-that merely looks high-volume (see the span bug above) would otherwise be
-re-probed every five minutes while broken.
+That setting binds only on the unmodelled path; for a modelled feed the
+staleness ceiling is `maxInterval`, not it.
 
-A permanently broken feed settles at one probe per `MAX_INTERVAL` (default 7d)
-instead of going dead or being hammered. On success the counter zeroes and the
-learned schedule resumes. The only knob is the ceiling.
+Dead feeds need no protection from here either. The item-rate EMA decays their
+budget on its own half-life (7d) down to the 1/day floor, and a 404 costs the
+origin nothing.
+
+**The one error signal that IS the origin speaking is `Retry-After`**, and it is
+honoured as a floor against the target (see Cache hints). That is the whole
+politeness story; nothing else is.
+
+`POLLING_PARSING_ERROR_LIMIT` remains purely an eligibility filter:
+`storage/batch.go` adds `parsing_error_count < limit` to the job query, so a feed
+at the limit is never polled again and no amount of writing `next_check_at`
+rescues it. It is set to `0`, so `WithErrorLimit` adds no clause at all and
+every feed stays eligible forever.
+
+## Target stability
+
+A target we have already committed to is replaced **only by an earlier one**.
+Two failures follow from not doing this:
+
+- a retry target (`checked_at` + 5–30 min) gets rewritten to the next bell one
+  tick later, so the retry chain never fires — the tick runs every 60s while
+  the offset is minutes away, so the loop reliably erases it before it is due;
+- a target that expired before Miniflux's batch consumed it is raised to the
+  following bell — "never due at all", the exact failure the staleness rule
+  exists to prevent. Miniflux's `POLLING_FREQUENCY` defaults to **60 minutes**,
+  so anyone running without our compose override loses bells constantly.
+
+The one exception is the tick where `checked_at` advances: there `next_check_at`
+is Miniflux's own freshly-written entry-frequency default rather than our plan,
+and it must be replaceable or a sparse feed gets pinned to Miniflux's rate.
+The `Retry-After` floor is the one thing allowed to push a target back out.
+
+## Known limits
+
+**Short cache hints are unrecoverable.** Miniflux writes
+`interval = min(max(entryInterval, refreshDelay), MaxInterval)`, so when
+`refreshDelay <= entryInterval` the `max()` collapses the gap and the stored
+`next_check_at` is identical whether a hint was present or not — a 30-second
+`Retry-After` and no `Retry-After` at all both store `entryInterval`. Decoding
+can only recover hints larger than the entry interval (plus slack for fetch
+duration). Closing this would mean reading response headers ourselves, which we
+cannot: Miniflux does the fetching.
+
+**A feed that was busy and then dies keeps polling at its old rate for roughly
+one EMA half-life (7d)** before the budget decays to the floor. That is one
+request per ~29 minutes at worst — below any sane hammering threshold — and it
+errs toward noticing recovery.
+
+**Retry-After is measured against `checked_at`, not the response**, because that
+is all Miniflux records. `checked_at` is stamped before the fetch and
+`next_check_at` after it, so the observed gap contains the fetch duration and
+the decoded hint is a slight overestimate. Overestimating a "do not return
+before" floor is the safe direction.
 
 Cosmetic cost of `=0`: `nav_metadata` hardcodes `count_error_feeds` to 0, so
 the sidebar error count reads zero. `CountAllFeedsWithErrors` (the metrics

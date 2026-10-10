@@ -9,9 +9,6 @@
 export const MINUTES_PER_DAY = 1440
 const MS_PER_DAY = 86_400_000
 
-/** Entries at or before this instant carry import-corrupted published_at. */
-export const PUBLISHED_AT_SENTINEL_MS = Date.UTC(2000, 0, 1)
-
 // ---- density / modes ----
 const DENSITY_BINS = 48
 const BIN_MINUTES = MINUTES_PER_DAY / DENSITY_BINS // 30
@@ -111,33 +108,6 @@ export function epochDay(ms: number): number {
  *  and silently break its 0..1439 contract. */
 export function minuteOfDay(ms: number): number {
   return Math.floor((((ms % MS_PER_DAY) + MS_PER_DAY) % MS_PER_DAY) / 60_000)
-}
-
-/**
- * Build a FeedInput from raw published_at timestamps (test helper / fallback).
- * Drops rows with published_at <= 2000-01-01 (import-corrupted sentinel).
- * medGapMinutes defaults to the upper median of consecutive gaps, like the sim.
- */
-export function summarizeFeed(feedId: number, publishedAt: Date[]): FeedInput {
-  const times = publishedAt
-    .map((d) => d.getTime())
-    .filter((ms) => ms > PUBLISHED_AT_SENTINEL_MS)
-    .sort((a, b) => a - b)
-
-  const stamps = times.map(minuteOfDay)
-  const dayCounts = new Map<number, number>()
-  for (const ms of times) {
-    const day = epochDay(ms)
-    dayCounts.set(day, (dayCounts.get(day) ?? 0) + 1)
-  }
-
-  const gaps: number[] = []
-  for (let i = 1; i < times.length; i++) {
-    gaps.push(((times[i] as number) - (times[i - 1] as number)) / 60_000)
-  }
-  const medGapMinutes = gaps.length ? (gaps[Math.floor(gaps.length / 2)] as number) : null
-
-  return { feedId, stamps, dayCounts, medGapMinutes }
 }
 
 /** Expand a minute-of-day count histogram back into a stamp multiset. */
