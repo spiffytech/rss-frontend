@@ -14,9 +14,14 @@ import { describe, expect, test } from 'bun:test'
 import {
   buildFeedModel,
   decodeCacheHintMinutes,
+  emaDailyCount,
   entryFrequencyIntervalMinutes,
+  errorCapPollsPerDay,
+  hostOf,
   MINUTES_PER_DAY,
   minuteOfDay,
+  nextPollInstant,
+  worstErrorCount,
   type FeedInput,
   type ScheduleOptions,
 } from './model'
@@ -271,5 +276,88 @@ describe('cache-hint decode', () => {
     const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
     expect(decodeCacheHintMinutes(observed, entry)).toBeGreaterThan(0)
     expect(decodeCacheHintMinutes(observed, entry)).toBeLessThanOrEqual(1440 - entry)
+  })
+})
+
+describe('errors limit the schedule, they do not replace it', () => {
+  const wideFeed = () => {
+    const stamps: number[] = []
+    const dayCounts = new Map<number, number>()
+    for (let i = 0; i < 90; i++) {
+      for (let k = 0; k < 40; k++) stamps.push(Math.floor((k * MINUTES_PER_DAY) / 40))
+      dayCounts.set(day(i), 40)
+    }
+    return buildFeedModel(feed(stamps, dayCounts, 20), OPTS)!
+  }
+
+  /** Every poll instant of the UTC day containing `dayStart`, honouring `cap`. */
+  const pollsOnDay = (m: ReturnType<typeof buildFeedModel>, dayStart: number, cap?: number) => {
+    const out: number[] = []
+    let cursor = dayStart - 1
+    const end = dayStart + MINUTES_PER_DAY * 60_000
+    for (let i = 0; i < 500; i++) {
+      const n = nextPollInstant(m!, cursor, 1, cap)
+      if (!n || n.getTime() >= end) break
+      out.push(n.getTime())
+      cursor = n.getTime()
+    }
+    return out
+  }
+
+  const MS_PER_DAY = 86_400_000
+  test('a cap thins the bells by stride instead of discarding the schedule', () => {
+    const m = wideFeed()
+    const dayStart = 19089 * MS_PER_DAY
+    expect(pollsOnDay(m, dayStart).length).toBe(40)
+    // 40 bells capped at 12 -> stride ceil(40/12)=4 -> 10 bells, still spread.
+    const thinned = pollsOnDay(m, dayStart, 12)
+    expect(thinned.length).toBe(10)
+    expect(thinned.length).toBeLessThan(40)
+    expect(thinned.length).toBeGreaterThan(1)
+  })
+
+  test('the strided bells are drawn from the learned set, not re-placed', () => {
+    const m = wideFeed()
+    const dayStart = 19089 * MS_PER_DAY
+    const learned = new Set(m.pollMinutes(new Date(dayStart).getUTCDay()).map((x) => x))
+    for (const t of pollsOnDay(m, dayStart, 12)) {
+      const minute = (t - dayStart) / 60_000
+      expect(learned.has(minute)).toBe(true)
+    }
+  })
+
+  test('each consecutive failure halves the allowance and floors at one', () => {
+    const cap = (n: number) => errorCapPollsPerDay(n, 1, 5, 1440, 10080)
+    expect(cap(1)).toBe(24) // 60m probe
+    expect(cap(2)).toBe(12) // 120m
+    expect(cap(3)).toBe(6) // 240m
+    expect(cap(4)).toBe(3) // 480m
+    expect(cap(5)).toBe(1) // 960m
+    expect(cap(20)).toBe(1) // clamped at 8 doublings
+  })
+})
+
+describe('politeness is owed to the host, not the subscription', () => {
+  test('hostOf extracts the origin, case-insensitively', () => {
+    expect(hostOf('https://www.youtube.com/feeds/videos.xml?playlist_id=UU1')).toBe('www.youtube.com')
+    expect(hostOf('http://www.questionablecontent.net/QCRSS.xml')).toBe('www.questionablecontent.net')
+    expect(hostOf('HTTPS://Example.COM/x')).toBe('example.com')
+    expect(hostOf('not-a-url')).toBe('')
+  })
+
+  test('a healthy feed on a failing host is throttled with its neighbours', () => {
+    // This is the YouTube case: 61 feeds each looked polite in isolation while
+    // the host saw 27 fetches in 10 minutes.
+    const hostErrs = new Map([['www.youtube.com', 3]])
+    expect(worstErrorCount('https://www.youtube.com/feeds/a', 0, hostErrs)).toBe(3)
+    expect(worstErrorCount('https://www.youtube.com/feeds/b', 0, hostErrs)).toBe(3)
+    // …and a feed on an unrelated host is untouched.
+    expect(worstErrorCount('https://example.com/x', 0, hostErrs)).toBe(0)
+  })
+
+  test('the worse of the two streaks wins', () => {
+    const hostErrs = new Map([['a.example', 1]])
+    expect(worstErrorCount('https://a.example/x', 5, hostErrs)).toBe(5)
+    expect(worstErrorCount('https://a.example/y', 0, hostErrs)).toBe(1)
   })
 })

@@ -33,10 +33,14 @@ import {
   decodeCacheHintMinutes,
   entryFrequencyIntervalMinutes,
   epochDay,
+  errorCapPollsPerDay,
   expandMinuteCounts,
+  hostOf,
   minuteOfDay,
   nextPollInstant,
+  probeInterval,
   retryOffsets,
+  worstErrorCount,
   type FeedInput,
   type FeedModel,
 } from './model'
@@ -109,9 +113,11 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * mutates it.
  */
 function probeIntervalMinutes(errorCount: number, s: Schedule): number {
-  const exponent = Math.min(Math.max(errorCount, 1), 8) - 1
-  return Math.min(
-    Math.max(60 * 2 ** exponent, s.minIntervalMinutes),
+  return probeInterval(
+    errorCount,
+    s.entryFrequencyFactor,
+    s.minIntervalMinutes,
+    s.maxIntervalMinutes,
     s.failingFeedMaxIntervalMinutes,
   )
 }
@@ -135,6 +141,15 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
   const feeds = await fetchFeeds(sql)
   const lastInserted = await fetchLastInsertedAt(sql)
   const weekly = await fetchWeeklyEntryCounts(sql)
+
+  // Worst consecutive-failure streak per host. Built once per tick from rows we
+  // already hold — no extra query, no persistence.
+  const hostErrs = new Map<string, number>()
+  for (const feed of feeds) {
+    const h = hostOf(feed.url)
+    if (!h) continue
+    hostErrs.set(h, Math.max(hostErrs.get(h) ?? 0, feed.parsingErrorCount))
+  }
 
   let models = cache
   if (!models || now - models.builtAt > REBUILD_MS) {
@@ -229,12 +244,29 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
     const jitter = ((feed.id * 2654435761) >>> 0) / 4294967296 // 0..1, stable per feed
     const staleBoundMs = anchorMs + s.maxIntervalMinutes * 60_000 * (0.96 + 0.04 * jitter)
     let targetMs: number
-    if (feed.parsingErrorCount > 0) {
-      targetMs = anchorMs + probeIntervalMinutes(feed.parsingErrorCount, s) * 60_000
+    const errs = worstErrorCount(feed.url, feed.parsingErrorCount, hostErrs)
+    if (!model) {
+      // Nothing learned to align to, so a plain probe interval is the best
+      // schedule we have -- bells cannot exist without a model.
+      targetMs =
+        errs > 0 ? anchorMs + probeIntervalMinutes(errs, s) * 60_000 : staleBoundMs
     } else {
-      const next = model ? nextPollInstant(model, now) : null
+      // Errors LIMIT the learned schedule; they do not replace it. Replacing it
+      // dropped Hacker News from 57 polls/day to one every two hours on a single
+      // transient failure -- while it was still producing 51 entries/day.
+      const cap =
+        errs > 0
+          ? errorCapPollsPerDay(
+              errs,
+              s.entryFrequencyFactor,
+              s.minIntervalMinutes,
+              s.maxIntervalMinutes,
+              s.failingFeedMaxIntervalMinutes,
+            )
+          : undefined
+      const next = nextPollInstant(model, now, 7, cap)
       targetMs = next ? next.getTime() : staleBoundMs
-      if (model && caughtNothing && feed.checkedAt != null) {
+      if (caughtNothing && feed.checkedAt != null) {
         // The anchor for a retry is the FETCH that caught nothing (checkedAt),
         // not the tick that noticed it.
         const checkedMs = feed.checkedAt.getTime()
@@ -252,7 +284,7 @@ async function tick(sql: SQL, s: Schedule, cache: ModelCache | null): Promise<Mo
     // backoff is the politeness mechanism and must be allowed to reach
     // SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES; capping it at maxInterval
     // made that setting dead and probed broken feeds once a day regardless.
-    if (feed.parsingErrorCount === 0) targetMs = Math.min(targetMs, staleBoundMs)
+    if (errs === 0) targetMs = Math.min(targetMs, staleBoundMs)
 
     const hint = hints.get(feed.id)
     if (hint != null && hint.checkedAt === anchorMs) {

@@ -12,6 +12,8 @@ import { SQL } from 'bun'
 export interface FeedRow {
   id: number
   userId: number
+  /** Feed URL — the host is the unit politeness is measured at. */
+  url: string
   /** Miniflux's last fetch time (ms precision — for change detection only). */
   checkedAt: Date | null
   /**
@@ -108,12 +110,13 @@ export async function fetchFeeds(sql: SQL): Promise<FeedRow[]> {
   const rows = await sql.unsafe<{
     id: number
     user_id: number
+    feed_url: string
     checked_at_text: string | null
     checked_at: Date | string | null
     next_check_at: Date | string | null
     parsing_error_count: number
   }[]>(
-    `SELECT id, user_id,
+    `SELECT id, user_id, feed_url,
             checked_at::text AS checked_at_text,
             checked_at, next_check_at, parsing_error_count
        FROM feeds`,
@@ -121,6 +124,7 @@ export async function fetchFeeds(sql: SQL): Promise<FeedRow[]> {
   return rows.map((r) => ({
     id: Number(r.id),
     userId: Number(r.user_id),
+    url: String(r.feed_url ?? ''),
     checkedAt: r.checked_at == null ? null : new Date(r.checked_at),
     checkedAtText: r.checked_at_text,
     nextCheckAt: r.next_check_at == null ? null : new Date(r.next_check_at),
