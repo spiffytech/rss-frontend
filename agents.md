@@ -106,3 +106,45 @@ bun --hot ./index.ts
 For more information, read the Bun API docs in `node_modules/bun-types/docs/**.mdx`.
 
 This project is in a public repo.
+
+## Untrusted feed HTML (hard rule)
+
+Entry content is untrusted feed HTML. It is inserted **client-side only**,
+through `Element.setHTML()` / DOMPurify (`src/client/display/render.ts` —
+`transformEntryContent` then `sinkEntryContent`), never server-rendered and
+never via `{@html}`: the Sanitizer API is DOM-time only, so a server render is
+an unguarded sink. The display policy lives in one table
+(`src/client/display/policy.ts`) that both sanitizer adapters read.
+
+## Tests & checks
+
+All commands run from `app/`:
+
+```sh
+bun test                    # unit suite (bun:test) — hermetic: in-memory DBs + fixtures,
+                            # no network, never touches production data or accounts
+bun run test:webview        # real-browser behavior suite (Bun.WebView → headless Chrome on
+                            # Linux, WKWebView on macOS): rebuilds, boots the app, exercises
+                            # the Sanitizer/display pipeline. Needs Chrome; skip on a bare box.
+bunx tsc --noEmit           # types
+bun run check               # svelte-check (components + svelte-kit sync)
+```
+
+Non-obvious tooling facts (all learned the hard way):
+
+- `typescript` is pinned to `^6` — TS 7 (native) removed `ts.sys`, which breaks `svelte-kit sync`
+  and svelte-check (upstream: sveltejs/language-tools#3063). Don't bump it until that closes.
+- Dev/build must run under Bun (`bun --bun vite …`, already wired into `bun run dev|build`):
+  SvelteKit's route-analysis worker uses a plain ESM loader that can't load `bun:*` specifiers,
+  and `bun:sqlite` stays lazy (`createRequire`) in `src/server/db/index.ts` for the same reason.
+- Never name a local `state` in a `.svelte` file (the codebase uses `appState`) — Svelte parses
+  `$state` as a store subscription then (`store_rune_conflict`).
+- `test/webview.test.ts` is the only place the display pipeline is proven against a real
+  browser engine — run it after touching `src/client/display/`.
+- Want a throwaway login for manual poking? `bun run scripts/seed-test-user.ts` seeds a
+  passwordless `test` user from the real account's feeds (`--delete` removes it). Never keep
+  a passwordless account on the public login form.
+
+The NEW app lives in `app/` — `cd app && bun run dev` (it reads `../data/reader.sqlite`).
+The repo-root `bun run dev` starts the OLD Vue/Miniflux app, which shows an empty
+reader now that Miniflux is retired. Root scripts stay until the final flatten/rename.

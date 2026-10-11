@@ -5,7 +5,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "run-p vite dev:server",
+    "dev": "cd app && bun run dev",
     "dev:server": "NODE_ENV=development bun --watch src/server/index.ts",
     "vite": "vite",
     "typecheck": "vue-tsc --noEmit -p tsconfig.app.json && vue-tsc --noEmit -p tsconfig.node.json && vue-tsc --noEmit -p tsconfig.vitest.json",
