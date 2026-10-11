@@ -1,0 +1,44 @@
+/**
+ * Per-account preferences. Ported from the old prefs side-DB shape
+ * (src/server/lib/prefs.ts of the previous app), extended with the v1
+ * read-time filter lists (stored inside the feed-scope prefs JSON).
+ *
+ * Scopes: `user` (UserPrefs) and `feed:<uuid>` (FeedPrefs).
+ */
+import type { FeedId } from './ids'
+
+export type UserPrefs = {
+  hideEmptyFeeds?: boolean
+  disabledAutoReadFeeds?: FeedId[]
+}
+
+export type FeedPrefs = {
+  viewMode?: 'expanded' | 'list'
+  sort?: 'oldest' | 'newest'
+  hideReadItems?: boolean
+  /** Read-time suppression: literal, case-insensitive, per feed. */
+  hiddenKeywords?: string[]
+  hiddenAuthors?: string[]
+  hiddenTags?: string[]
+}
+
+/** Global view defaults are hardcoded until a global preference UI exists. */
+export const DEFAULT_VIEW_MODE = 'expanded' as const
+export const DEFAULT_SORT = 'oldest' as const
+export const DEFAULT_HIDE_READ_ITEMS = true
+
+/** Reading time is surfaced only at or above this many minutes. */
+export const READING_TIME_DISPLAY_MIN = 2
+
+export function userScope(): string {
+  return 'user'
+}
+
+export function feedScope(feedId: FeedId): string {
+  return `feed:${feedId}`
+}
+
+/** `feed:<uuid>` → FeedId, or null for any other scope. */
+export function scopeFeedId(scope: string): FeedId | null {
+  return scope.startsWith('feed:') ? (scope.slice('feed:'.length) as FeedId) : null
+}

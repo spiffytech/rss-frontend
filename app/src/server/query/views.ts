@@ -1,0 +1,188 @@
+/**
+ * View queries: one full display set per view (IDs + metadata — entry bodies
+ * load per card), newest- or oldest-first per the resolved prefs. The hidden
+ * filter predicate and the counters share one definition of "visible", and
+ * soft-deleted rows never appear anywhere.
+ */
+import { and, asc, desc, eq, sql, type SQL } from 'drizzle-orm'
+
+import type { EntriesFilter } from '../../shared/filter'
+import type { CategoryCount, EntryContent, EntrySummary, FeedInfo, FeedPanelResult } from '../../shared/types'
+import { DEFAULT_HIDE_READ_ITEMS } from '../../shared/prefs'
+import type { CategoryId, EntryId, FeedId, UserId } from '../../shared/ids'
+import type { ReaderHandle } from '../db'
+import { categories, entries, feedIcons, feeds } from '../db/schema'
+import { notHiddenPredicate } from './filters'
+import { translateSearch } from './search'
+
+type Db = ReaderHandle['db']
+
+/** First window of a view; scrolling to the end fetches the next. */
+export const VIEW_PAGE_SIZE = 100
+
+import type { ViewCursor } from '../../shared/types'
+export type { ViewCursor }
+
+function visibilityConditions(userId: UserId, filter: EntriesFilter): { where: SQL[]; order: SQL } {
+  const isSearch = (filter.search ?? '') !== ''
+  const where: SQL[] = [
+    eq(entries.userId, userId),
+    sql`${entries.status} <> 'removed'`,
+    sql`(${notHiddenPredicate()})`,
+  ]
+
+  // Search spans both buckets by default (the old app's search did); plain
+  // views follow hideReadItems (default: unread only).
+  const hideRead = isSearch ? filter.searchStatus === 'unread' : filter.hideReadItems ?? DEFAULT_HIDE_READ_ITEMS
+  if (hideRead) where.push(eq(entries.status, 'unread'))
+  if (filter.starred === true) where.push(eq(entries.starred, true))
+  if (filter.feedId) where.push(eq(entries.feedId, filter.feedId as FeedId))
+  if (filter.categoryId) {
+    where.push(sql`${entries.feedId} IN (SELECT id FROM feeds WHERE category_id = ${filter.categoryId})`)
+  }
+
+  if (isSearch) {
+    const q = translateSearch(filter.search!, { typeAhead: true })
+    // MATCH's left operand must be the FTS5 table's name (its hidden column) —
+    // an alias like `f MATCH` parses as a plain column reference and fails.
+    if (q.kind === 'terms') {
+      where.push(
+        sql`EXISTS (SELECT 1 FROM entries_fts WHERE entries_fts.rowid = entries.rowid AND entries_fts MATCH ${q.match})`,
+      )
+    } else if (q.kind === 'exclusions') {
+      where.push(
+        sql`NOT EXISTS (SELECT 1 FROM entries_fts WHERE entries_fts.rowid = entries.rowid AND entries_fts MATCH ${q.match})`,
+      )
+    }
+  }
+
+  // Search is always newest-first (plan); other views honor the sort pref.
+  const newestFirst = isSearch || filter.sort === 'newest'
+  const order = newestFirst ? desc(entries.publishedAt) : asc(entries.publishedAt)
+  return { where, order: sql`${order}, ${newestFirst ? desc(entries.id) : asc(entries.id)}` }
+}
+
+export function queryView(
+  db: Db,
+  opts: { userId: UserId; filter: EntriesFilter; cursor?: ViewCursor | null; limit?: number },
+): { entries: EntrySummary[]; nextCursor: ViewCursor | null } {
+  const { where, order } = visibilityConditions(opts.userId, opts.filter)
+  const newestFirst = (opts.filter.search ?? '') !== '' ? true : opts.filter.sort === 'newest'
+  const cursor = opts.cursor
+  if (cursor) {
+    // Keyset continuation on (published_at, id) — the same pair the ORDER BY
+    // uses, so equal timestamps can't skip or repeat rows at the seam.
+    where.push(
+      newestFirst
+        ? sql`(${entries.publishedAt} < ${cursor.publishedAt} OR (${entries.publishedAt} = ${cursor.publishedAt} AND ${entries.id} < ${cursor.id}))`
+        : sql`(${entries.publishedAt} > ${cursor.publishedAt} OR (${entries.publishedAt} = ${cursor.publishedAt} AND ${entries.id} > ${cursor.id}))`,
+    )
+  }
+  const limit = opts.limit ?? VIEW_PAGE_SIZE
+  const rows = db
+    .select({
+      id: entries.id,
+      feedId: entries.feedId,
+      feedTitle: feeds.title,
+      title: entries.title,
+      url: entries.url,
+      author: entries.author,
+      publishedAt: entries.publishedAt,
+      status: entries.status,
+      starred: entries.starred,
+      readingTime: entries.readingTime,
+      tags: entries.tags,
+    })
+    .from(entries)
+    .innerJoin(feeds, eq(entries.feedId, feeds.id))
+    .where(and(...where))
+    .orderBy(order)
+    .limit(limit + 1)
+    .all()
+
+  const page = rows.slice(0, limit)
+  const nextCursor: ViewCursor | null =
+    rows.length > limit && page.length > 0
+      ? { publishedAt: page[page.length - 1]!.publishedAt, id: page[page.length - 1]!.id }
+      : null
+  return { entries: page, nextCursor }
+}
+
+/** Per-card body fetch (raw HTML — display transforms are client-side). */
+export function getEntryContent(db: Db, opts: { userId: UserId; entryId: EntryId }): EntryContent | null {
+  const row = db
+    .select({
+      id: entries.id,
+      content: entries.content,
+      commentsUrl: entries.commentsUrl,
+      language: entries.language,
+      feedBaseUrl: sql<string | null>`COALESCE(${feeds.siteUrl}, ${feeds.feedUrl})`,
+    })
+    .from(entries)
+    .innerJoin(feeds, eq(entries.feedId, feeds.id))
+    .where(and(eq(entries.id, opts.entryId), eq(entries.userId, opts.userId), sql`${entries.status} <> 'removed'`))
+    .get()
+  return row ?? null
+}
+
+/** Sidebar snapshot: feeds, categories with totals, and per-feed unread counts. */
+export function panel(db: Db, opts: { userId: UserId; hideEmptyFeeds: boolean }): FeedPanelResult {
+  const feedRows = db
+    .select({
+      id: feeds.id,
+      categoryId: feeds.categoryId,
+      title: feeds.title,
+      siteUrl: feeds.siteUrl,
+      feedUrl: feeds.feedUrl,
+      disabled: feeds.disabled,
+      parsingErrorCount: feeds.parsingErrorCount,
+      iconId: feedIcons.iconId,
+    })
+    .from(feeds)
+    .leftJoin(feedIcons, eq(feedIcons.feedId, feeds.id))
+    .where(eq(feeds.userId, opts.userId))
+    .orderBy(asc(feeds.title))
+    .all()
+
+  const counterRows = db
+    .select({ feedId: entries.feedId, count: sql<number>`count(*)` })
+    .from(entries)
+    .innerJoin(feeds, eq(entries.feedId, feeds.id))
+    .where(and(eq(entries.userId, opts.userId), eq(entries.status, 'unread'), sql`${entries.status} <> 'removed'`, sql`(${notHiddenPredicate()})`))
+    .groupBy(entries.feedId)
+    .all()
+
+  const counters: Record<string, number> = {}
+  for (const row of counterRows) counters[row.feedId] = row.count
+
+  const categoryRows = db.select().from(categories).where(eq(categories.userId, opts.userId)).orderBy(asc(categories.title)).all()
+  const feedsByCategory = new Map<string, { count: number; unread: number }>()
+  for (const feed of feedRows) {
+    const entry = feedsByCategory.get(feed.categoryId) ?? { count: 0, unread: 0 }
+    entry.count++
+    entry.unread += counters[feed.id] ?? 0
+    feedsByCategory.set(feed.categoryId, entry)
+  }
+
+  const categoryCounts: CategoryCount[] = categoryRows.map((c) => ({
+    id: c.id as CategoryId,
+    title: c.title,
+    totalUnread: feedsByCategory.get(c.id)?.unread ?? 0,
+    feedCount: feedsByCategory.get(c.id)?.count ?? 0,
+  }))
+
+  const visibleFeeds: FeedInfo[] = feedRows
+    .filter((f) => !opts.hideEmptyFeeds || (counters[f.id] ?? 0) > 0 || f.parsingErrorCount > 0)
+    .map((f) => ({
+      id: f.id,
+      categoryId: f.categoryId,
+      title: f.title,
+      siteUrl: f.siteUrl,
+      feedUrl: f.feedUrl,
+      disabled: f.disabled,
+      parsingErrorCount: f.parsingErrorCount,
+      iconUrl: f.iconId === null ? null : `/api/icons/${f.id}`,
+    }))
+
+  return { feeds: visibleFeeds, categories: categoryCounts, counters: counters as Record<FeedId, number> }
+}

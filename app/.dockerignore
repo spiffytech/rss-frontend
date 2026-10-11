@@ -1,0 +1,10 @@
+# never ship these in an image (COPY ignores .gitignore!)
+node_modules
+build
+.svelte-kit
+data
+import-dump
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+test
