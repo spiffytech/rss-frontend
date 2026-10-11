@@ -1,0 +1,26 @@
+Reader (working title — repo rename pending)
+Copyright (c) 2026 spiffytech
+
+This product includes software developed by the Miniflux project
+(https://miniflux.app), licensed under the Apache License, Version 2.0
+(full text in LICENSES/Apache-2.0.txt):
+
+  - The entry identity hash recipe (app/src/server/reader/hash.ts), ported
+    from internal/reader/{rss,atom,rdf,json}/adapter.go and
+    internal/crypto/crypto.go.
+  - Hash test vectors in app/test/hash.test.ts, from
+    internal/reader/{rss,atom}/*_test.go.
+  - Import verification semantics reference
+    internal/storage/entry.go (IsNewEntry / entry_tombstones).
+
+This product includes software developed by the NewsBlur project
+(https://newsblur.com), licensed under the MIT License (full text in
+LICENSES/MIT.txt):
+
+  - Feed-fetch quirk behaviors (app/src/server/fetch/quirks.ts), ported from
+    utils/feed_fetcher.py and utils/story_functions.py (mojibake repair,
+    charset fallback, single-guid replacement, guid fallback chain, date
+    clamping, entry cap, malformed-XML tolerance, guid-drift handling).
+
+SPDX-License-Identifier: Apache-2.0 AND MIT (for the respective ported files;
+each ported file carries its own SPDX header)
