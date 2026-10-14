@@ -1,10 +1,23 @@
 /**
  * Pure feed-scheduling model. No I/O — everything here is unit-testable.
  *
- * Ported from the validated reference implementation at
- * playground/scripts/poll-sim.ts (`simulate()` placement/budget logic).
+ * Ported verbatim from the validated reference implementation
+ * (src/server/lib/schedule/model.ts of the retired Miniflux-supervisor app,
+ * itself ported from playground/scripts/poll-sim.ts). Two deltas, both because
+ * this app IS the fetcher and the only writer of `next_check_at`:
+ *
+ * - `decodeCacheHintMinutes` / `entryFrequencyIntervalMinutes` are GONE. They
+ *   existed to recover a cache hint Miniflux had folded into `next_check_at`.
+ *   Here the fetcher reads `Retry-After` / `Cache-Control` / `Expires` itself,
+ *   so the hint is exact data applied as a floor — which also closes the old
+ *   doc's "short cache hints are unrecoverable" limitation.
+ * - Feed ids are UUID strings, so the per-feed jitter hash is FNV-1a over the
+ *   id string (UUIDv7 ids share a time prefix; hashing the id itself would
+ *   correlate neighbours).
+ *
  * Times of day are UTC minutes 0..1439; days are UTC epoch-day numbers.
  */
+import type { FeedId } from '../../shared/ids'
 
 export const MINUTES_PER_DAY = 1440
 const MS_PER_DAY = 86_400_000
@@ -25,7 +38,7 @@ const MIN_DOW_SAMPLES = 12 // weekday gate needs >= 12 DISTINCT active days to m
 const SINGLE_POLL_QUANTILE = 0.85
 
 export interface FeedInput {
-  feedId: number
+  feedId: FeedId
   /** Minute-of-day (0..1439) of every published entry in the window, with multiplicity. */
   stamps: number[]
   /** Entry count per UTC day (epoch-day number -> count). */
@@ -41,20 +54,17 @@ export interface ScheduleOptions {
   maxPollsPerDay: number
   /**
    * SCHEDULER_LEARNING_WINDOW_DAYS. Used as the FIXED denominator of the
-   * no-weekday-signal rate — see the budget comment below.
+   * no-weekday-signal rate.
    */
   learningWindowDays: number
-  /**
-   * SCHEDULER_RATE_HALF_LIFE_DAYS — how fast the item-rate EMA tracks a feed
-   * that changes pace. See {@link emaDailyCount}.
-   */
+  /** SCHEDULER_RATE_HALF_LIFE_DAYS — how fast the item-rate EMA tracks a feed. */
   rateHalfLifeDays: number
   /** UTC epoch-day of "today"; the EMA is anchored here. */
   nowEpochDay: number
 }
 
 export interface FeedModel {
-  feedId: number
+  feedId: FeedId
   /** All entries stamped midnight exactly: no time-of-day signal exists. */
   dateOnly: boolean
   /** Density has a peak > 3x its mean. */
@@ -133,16 +143,10 @@ function quantile(sorted: number[], t: number): number {
 
 /**
  * Exponentially weighted item rate, in items/day, over the learning window.
- *
- * This replaces a flat `N / learningWindowDays` average, which cannot follow a
- * feed that changes pace: a feed averaging 3.6 items/day and then publishing
- * 30/day still earned a budget of ~4 and missed items for hours.
- *
- * It is SAFER than the mean-gap formula it replaces, not merely different.
- * That pathology derived a rate from GAPS — two entries five minutes apart
- * make the denominator collapse and yield 288 items/day. A per-day count
- * cannot be inflated by clustering: those two entries are 2 on one day, so the
- * EMA sees 2. Clustering within a day is invisible to it by construction.
+ * See the design doc (docs/feed-scheduler.md) for why this replaces both a
+ * flat window average and the mean-gap formula: a per-day count cannot be
+ * inflated by within-day clustering, and the `1 − decay^learnDays` normalisation
+ * makes a steady feed report exactly its rate at any half-life.
  */
 export function emaDailyCount(
   dayCounts: Map<number, number>,
@@ -157,10 +161,6 @@ export function emaDailyCount(
   for (let k = learnDays - 1; k >= 0; k--) {
     ema = ema * decay + (dayCounts.get(nowEpochDay - k) ?? 0) * alpha
   }
-  // Normalise the truncated tail. The window cuts off the infinite series, so
-  // without this a constant rate r reads as r*(1 - decay^learnDays) — a silent
-  // underestimate whenever the window is not many half-lives long. With it, a
-  // steady feed reports exactly its rate for ANY half-life.
   const mass = 1 - Math.pow(decay, learnDays)
   return mass > 1e-9 ? ema / mass : ema
 }
@@ -180,8 +180,7 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
   // 48-bin density over rotated minutes, smoothed 3x with the circular
   // [1,2,1]/4 kernel. Rotation keeps a mode that straddles midnight from being
   // split in two by the day boundary; the smoothing is what the mode-counting
-  // below reads. Equivalent to the sim's unrotated histogram — the rotation is
-  // a rigid shift, so bin widths and peak ratios are unchanged.
+  // below reads.
   const dh = new Array<number>(DENSITY_BINS).fill(0)
   for (const s of stamps) {
     const bin = Math.floor((((s - seamBin * BIN_MINUTES) % MINUTES_PER_DAY + MINUTES_PER_DAY) % MINUTES_PER_DAY) / BIN_MINUTES)
@@ -224,9 +223,7 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
 
   // Weekday gate: only trust the day-of-week pattern with enough DISTINCT days,
   // and count days rather than entries. Counting entries lets one burst invent
-  // a weekly commitment -- 20 entries on a single Tuesday would claim
-  // "publishes on Tuesdays" and spend the whole burst budget every Tuesday
-  // forever, on one day of evidence.
+  // a weekly commitment.
   const dowDays = new Array<number>(7).fill(0)
   for (const day of input.dayCounts.keys()) {
     const dow = dayOfWeek(day)
@@ -234,29 +231,22 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
   }
   const publishDays = new Set<number>()
   // A weekday counts as a publish day if it carries at least half the AVERAGE
-  // number of active days. The previous fixed share (0.12) was far too fragile:
-  // a feed that posts every day lands at ~1/7 = 0.143 per weekday, so ordinary
-  // sampling noise can drop one weekday below 0.12, flip dowSignal on, and give
-  // every excluded weekday a budget of 1. That silently turned Hacker News
-  // (65 items/day) into a once-a-day feed.
+  // number of active days. A fixed share is fragile: a feed that posts every
+  // day lands at ~1/7 per weekday and ordinary sampling noise flips the gate.
   const minDaysPerDow = Math.max(1, activeDays / 14)
   for (let d = 0; d < 7; d++) {
     if ((dowDays[d] as number) >= minDaysPerDow) publishDays.add(d)
   }
   const dowSignal = activeDays >= MIN_DOW_SAMPLES && publishDays.size > 0 && publishDays.size < 7
 
-  // Budget = items expected TODAY.
-  //
-  // The rate is an EMA of per-day entry counts (see emaDailyCount), not a flat
-  // window average, so it follows a feed that accelerates. `perActiveDay`
-  // scales it back to "per day it actually posts" so the weekday gate can
-  // spend it all on a publish day: with no weekday signal the two factors
-  // cancel and the budget is just the EMA itself.
+  // Budget = items expected TODAY. Rate is an EMA of per-day entry counts;
+  // `perActiveDay` scales it back to "per day it actually posts" so the weekday
+  // gate can spend it all on a publish day: with no weekday signal the two
+  // factors cancel and the budget is just the EMA itself.
   const ratePerDay = emaDailyCount(input.dayCounts, opts.nowEpochDay, opts.rateHalfLifeDays, learnDays)
   const perActiveDay = (ratePerDay * learnDays) / Math.max(1, activeDays)
   // ceil() with an epsilon: the EMA is iterative float arithmetic, so a feed
-  // that is exactly N/day can compute as N+1e-12 and ceil() it up to N+1. The
-  // old flat formula was exact integer arithmetic and never hit this.
+  // that is exactly N/day can compute as N+1e-12 and ceil() it up to N+1.
   const CEIL_EPS = 1e-9
   // The floor must never exceed the ceiling: a date-only feed on an instance
   // configured for < 3 polls/day would otherwise get clamp(x, 3, 2) = 3 and
@@ -322,71 +312,25 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
 }
 
 /**
- * Miniflux's entry-frequency interval, replicated exactly (internal/model/feed.go
- * `ScheduleNextCheck`) so the cache-hint decoder can subtract it and isolate the
- * hint Miniflux folded in via `max(interval, refreshDelay)`.
- */
-export function entryFrequencyIntervalMinutes(
-  weeklyCount: number,
-  factor: number,
-  minIntervalMinutes: number,
-  maxIntervalMinutes: number,
-): number {
-  const raw = weeklyCount > 0 ? (7 * 24 * 60) / (weeklyCount * factor) : maxIntervalMinutes
-  return Math.min(Math.max(raw, minIntervalMinutes), maxIntervalMinutes)
-}
-
-/**
- * Recover Miniflux's cache hint from what it wrote.
- *
- * Miniflux persists `interval = min(max(entryInterval, refreshDelay), maxInterval)`,
- * and its two clock readings STRADDLE the fetch — so `observed` also contains the
- * fetch duration. Combining the two:
- *
- *   refreshDelay <= entry  ->  observed == entry (+fetch)      -> no hint
- *   refreshDelay >  entry  ->  observed == refreshDelay (+fetch) -> hint = observed
- *
- * So the hint is the whole observed gap, never `observed - entry`: subtracting
- * under-honours a Retry-After by exactly one entry interval. Slack absorbs the
- * fetch duration; anything at or below `entry` is genuinely indistinguishable
- * from no hint at all (the max() collapsed it) and must read as none.
- *
- * Only sound to call on the tick where `checked_at` advanced: that is the one
- * moment when `next_check_at` is provably Miniflux's and not our own previous
- * write.
- */
-const HINT_SLACK_MINUTES = 3 // fetch time is inside the observed gap
-
-export function decodeCacheHintMinutes(
-  observedMinutes: number,
-  entryIntervalMinutes: number,
-): number {
-  return observedMinutes > entryIntervalMinutes + HINT_SLACK_MINUTES ? observedMinutes : 0
-}
-
-/**
  * A target we already committed to is replaced only by an EARLIER one.
  *
  * Two failures come from not doing this:
- *   - a retry target (checkedAt + 5..30min) gets rewritten to the next bell one
- *     tick later, so the retry chain never fires;
- *   - a target that expired before Miniflux's batch consumed it is raised to
- *     the following bell — "never due at all", the exact failure the staleness
- *     rule exists to prevent.
+ *   - a retry/probe target (anchor + minutes) gets rewritten to the next bell
+ *     one tick later and the retry chain never fires;
+ *   - a target that expired before the fetcher consumed it is raised to the
+ *     following bell — "never due at all".
  *
- * `justFetched` is the one exception: on that tick `currentNextMs` is Miniflux's
- * own freshly-written entry-frequency default rather than our plan, so it has
- * to be replaceable — otherwise a sparse feed is pinned to Miniflux's rate
- * instead of its learned bell.
+ * `justFetched` is the one exception: right after a fetch the fresh target is
+ * a real plan rather than a stale commitment, so it replaces freely.
  *
- * `hintFloorMs` is the origin's Retry-After / cache floor: the one thing allowed
- * to push a target back out.
+ * `hintFloorMs` is the origin's Retry-After / cache floor: the one thing
+ * allowed to push a target back out.
  */
 export function resolveTarget(
   candidateMs: number,
   currentNextMs: number | null,
   justFetched: boolean,
-  hintFloorMs?: number,
+  hintFloorMs?: number | null,
 ): number {
   let t = candidateMs
   if (!justFetched && currentNextMs != null) t = Math.min(t, currentNextMs)
@@ -413,4 +357,111 @@ export function nextPollInstant(
     }
   }
   return null
+}
+
+/**
+ * Failing-feed probe interval: 1h doubling per consecutive failure, floored at
+ * the minimum interval (NOT an entry-frequency interval, or feeds that merely
+ * look high-volume get hammered) and capped so nothing is ever dead for good.
+ *
+ * This is the ONLY place error backoff applies — see docs/feed-scheduler.md.
+ * `parsing_error_count` is the streak counter for free: it increments per
+ * failure and zeroes on success.
+ */
+export function probeIntervalMinutes(
+  errorCount: number,
+  bounds: { minIntervalMinutes: number; failingFeedMaxIntervalMinutes: number },
+): number {
+  const exponent = Math.min(Math.max(errorCount, 1), 8) - 1
+  return Math.min(
+    Math.max(60 * 2 ** exponent, bounds.minIntervalMinutes),
+    bounds.failingFeedMaxIntervalMinutes,
+  )
+}
+
+/** Stable 0..1 jitter per feed id (FNV-1a). UUIDv7 ids share a time prefix,
+ *  so hashing the id itself would correlate neighbours. */
+export function stableJitter(id: string): number {
+  let h = 2166136261
+  for (let i = 0; i < id.length; i++) {
+    h ^= id.charCodeAt(i)
+    h = Math.imul(h, 16777619)
+  }
+  return (h >>> 0) / 4294967296
+}
+
+export interface FeedScheduleState {
+  id: FeedId
+  /** The host is the unit politeness is measured at. */
+  url: string
+  /** Last fetch time — the stable anchor for now-relative targets. */
+  checkedAt: number | null
+  /** Current committed target (epoch-ms), or null when never scheduled. */
+  nextCheckAt: number | null
+  parsingErrorCount: number
+}
+
+export interface PlanContext {
+  nowMs: number
+  /** A fetch completed since the previous plan: replace the target freely. */
+  justFetched: boolean
+  /** The origin's floor (Retry-After / cache freshness), when it spoke. */
+  hintFloorMs?: number | null
+}
+
+export interface PlanBounds {
+  minIntervalMinutes: number
+  maxIntervalMinutes: number
+  failingFeedMaxIntervalMinutes: number
+  entryFrequencyFactor: number
+  maxPollsPerDay: number
+  learningWindowDays: number
+  rateHalfLifeDays: number
+}
+
+/**
+ * The per-feed decision, extracted from the old runner so it is unit-testable.
+ * Anchors every now-relative target to `checkedAt` — recomputing `now + X` each
+ * tick makes the deadline CHASE THE CLOCK (the tolerance check compares the
+ * recomputed value against the previous write and rewrites), so the deadline
+ * slides forward forever and never becomes due. `checkedAt` is a stable anchor.
+ */
+export function planTarget(
+  feed: FeedScheduleState,
+  model: FeedModel | null,
+  bounds: PlanBounds,
+  ctx: PlanContext,
+): number {
+  const anchorMs = feed.checkedAt ?? ctx.nowMs
+  // Per-feed jitter band on the staleness bound. A shared checked_at produces a
+  // shared bound, so every feed fetched together would become due together 24h
+  // later and reproduce the cluster forever. 4% of a 24h maxInterval = 57.6min.
+  const jitter = stableJitter(feed.id)
+  const staleBoundMs = anchorMs + bounds.maxIntervalMinutes * 60_000 * (0.96 + 0.04 * jitter)
+
+  let targetMs: number
+  if (!model) {
+    // No learned schedule to preserve: a plain probe interval is the best we
+    // have, and the ONLY place error backoff applies.
+    targetMs =
+      feed.parsingErrorCount > 0
+        ? anchorMs + probeIntervalMinutes(feed.parsingErrorCount, bounds) * 60_000
+        : staleBoundMs
+  } else {
+    // Always the learned bells. Errors do NOT throttle them — a 502 is the
+    // server failing, not asking us to slow down. Retry-After is the one error
+    // signal that IS the origin speaking, and it is a floor below.
+    const next = nextPollInstant(model, ctx.nowMs)
+    targetMs = next ? next.getTime() : staleBoundMs
+  }
+
+  // Staleness ceiling: never later than maxInterval since the last REAL check,
+  // spread per-feed. Superseded only on the unmodelled probe path, where
+  // SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES is the binding cap.
+  const probed = !model && feed.parsingErrorCount > 0
+  if (!probed) targetMs = Math.min(targetMs, staleBoundMs)
+
+  // Never postpone a target we already committed to; the origin's floor is the
+  // one thing allowed to push back.
+  return resolveTarget(targetMs, feed.nextCheckAt, ctx.justFetched, ctx.hintFloorMs)
 }

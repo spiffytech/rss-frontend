@@ -15,6 +15,13 @@
       "when": 1791661616815,
       "tag": "0001_lush_tattoo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1791744119328,
+      "tag": "0002_old_bloodstrike",
+      "breakpoints": true
     }
   ]
 }

@@ -1,5 +1,6 @@
 /**
  * Tick-freshness state for the scheduler loop and the /health route.
+ * Ported verbatim from the retired app (src/server/lib/schedule/heartbeat.ts).
  *
  * A tick only counts as *completed* when it succeeded — a failed tick records
  * the error but does not refresh `lastTickAt`, so persistent failures age out

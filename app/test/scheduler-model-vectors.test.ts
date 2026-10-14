@@ -1,28 +1,33 @@
 /**
- * Unit tests for the scheduling model. These pin the behaviours that the
- * simulator (`playground/scripts/poll-sim.ts`) validated, and in particular the
- * regression that motivated the design: Miniflux's entry_frequency derives a
- * feed's rate from `(max - min) / (count - 1)`, whose denominator collapses
- * when entries cluster. Two entries five minutes apart therefore look like an
- * extremely fast feed and get polled 288x/day. Our budget divides by the
- * learning window instead, so clustering cannot inflate it.
+ * The original scheduler model vectors, ported verbatim from the retired app's
+ * src/server/lib/schedule/model.test.ts (same author, same design doc:
+ * docs/feed-scheduler.md). They pin the behaviours the simulator validated and
+ * the regressions that motivated the design — Miniflux's `(max-min)/(count-1)`
+ * rate collapsing under clustering, the weekday gate turning a 65-items/day
+ * feed into a once-a-day feed, the truncated-tail EMA understating a steady
+ * rate, and `clamp(x, 3, 2)` polling a date-only feed MORE than its ceiling.
  *
- * Run: bun test src/server/lib/schedule
+ * One block is deliberately absent: `cache-hint decode` tested
+ * `entryFrequencyIntervalMinutes` / `decodeCacheHintMinutes`, machinery that
+ * existed only to recover a hint Miniflux had folded into `next_check_at`. This
+ * app fetches feeds itself, so the hint is read directly from the response
+ * (`Retry-After` / cache freshness) and persisted in `feeds.fetch_after_at` —
+ * there is nothing to decode. See scheduler/model.ts's header.
+ *
+ * Only adaptation: `feedId` is a UUID string, not a Miniflux integer.
  */
 import { describe, expect, test } from 'bun:test'
 
+import type { FeedId } from '../src/shared/ids'
 import {
   buildFeedModel,
-  decodeCacheHintMinutes,
-  emaDailyCount,
-  entryFrequencyIntervalMinutes,
   MINUTES_PER_DAY,
   minuteOfDay,
   nextPollInstant,
   resolveTarget,
   type FeedInput,
   type ScheduleOptions,
-} from './model'
+} from '../src/server/scheduler/model'
 
 const OPTS: ScheduleOptions = {
   entryFrequencyFactor: 1,
@@ -36,7 +41,7 @@ const OPTS: ScheduleOptions = {
 const day = (i: number) => 19000 + i
 
 function feed(stamps: number[], dayCounts: Map<number, number>, medGapMinutes: number | null): FeedInput {
-  return { feedId: 1, stamps, dayCounts, medGapMinutes }
+  return { feedId: 'feed-1' as FeedId, stamps, dayCounts, medGapMinutes }
 }
 
 describe('buildFeedModel', () => {
@@ -225,68 +230,6 @@ describe('regressions', () => {
   })
 })
 
-describe('cache-hint decode', () => {
-  // Mirrors Miniflux's ScheduleNextCheck: interval = min(max(entryInterval,
-  // refreshDelay), maxInterval). The decoder must invert this exactly.
-  const minifluxWrites = (
-    weeklyCount: number,
-    refreshDelayMin: number,
-    factor = 1,
-    minI = 5,
-    maxI = 1440,
-  ): number => {
-    const entry = entryFrequencyIntervalMinutes(weeklyCount, factor, minI, maxI)
-    return Math.min(Math.max(entry, refreshDelayMin), maxI)
-  }
-
-  test('entry-frequency interval matches Miniflux, including the zero-count case', () => {
-    // 397 items/week -> 10080/397 = 25.4 min
-    expect(entryFrequencyIntervalMinutes(397, 1, 5, 1440)).toBeCloseTo(25.4, 1)
-    // No entries -> max interval, not divide-by-zero.
-    expect(entryFrequencyIntervalMinutes(0, 1, 5, 1440)).toBe(1440)
-    // One entry -> Miniflux returns 0 from WeeklyFeedEntryCount -> max interval.
-    expect(entryFrequencyIntervalMinutes(0, 1, 5, 1440)).toBe(1440)
-    // Clamped at both ends.
-    expect(entryFrequencyIntervalMinutes(100000, 1, 5, 1440)).toBe(5)
-    expect(entryFrequencyIntervalMinutes(1, 1, 5, 1440)).toBe(1440)
-  })
-
-  test('round-trips a Retry-After hint through Miniflux\'s write formula', () => {
-    // Miniflux writes interval = min(max(entry, refreshDelay), Max). When the
-    // hint is the larger term, the gap it writes IS the hint -- do not subtract
-    // the entry interval back out of it.
-    const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440) // ~25.4m
-    const observed = minifluxWrites(397, 120) // max(25.4, 120) = 120
-    expect(observed).toBe(120)
-    // The full 120 minutes must survive. Trimming by `entry` here means we
-    // come back at +94.6m and poll 25 minutes before Retry-After allowed.
-    expect(decodeCacheHintMinutes(observed, entry)).toBe(120)
-  })
-
-  test('reports no hint when entry frequency alone explains the gap', () => {
-    const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
-    const observed = minifluxWrites(397, 0) // = entry
-    expect(decodeCacheHintMinutes(observed, entry)).toBe(0)
-  })
-
-  test('a hint below the entry interval cannot be recovered and must read as none', () => {
-    // min(max(entry, refreshDelay), Max) collapses to `entry` whenever the hint
-    // is the smaller term, so 0 and entry are indistinguishable in the DB. The
-    // decode must read that as "no hint" rather than invent one.
-    const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
-    expect(decodeCacheHintMinutes(entry, entry)).toBe(0)
-    expect(decodeCacheHintMinutes(entry - 5, entry)).toBe(0)
-  })
-
-  test('a hint pinned at the max interval still floors at the max interval', () => {
-    // refreshDelay huge -> Miniflux caps at MaxInterval = 1440.
-    const entry = entryFrequencyIntervalMinutes(397, 1, 5, 1440)
-    const observed = minifluxWrites(397, 100000) // min(max(25.4, 100000), 1440)
-    expect(observed).toBe(1440)
-    expect(decodeCacheHintMinutes(observed, entry)).toBe(1440)
-  })
-})
-
 describe('a committed target is never postponed', () => {
   test('a pending retry survives the next tick instead of being clobbered', () => {
     // The retry chain is written on the tick where checked_at advances. The
@@ -298,7 +241,7 @@ describe('a committed target is never postponed', () => {
   })
 
   test('an overdue target stays overdue instead of sliding to the next bell', () => {
-    // A target that expired before Miniflux's batch consumed it must remain
+    // A target that expired before the fetch batch consumed it must remain
     // due now, not be raised to a future bell ("never due at all").
     const overdue = 1000
     const nextBell = 1000 + 3 * 60 * 60 * 1000
@@ -306,12 +249,12 @@ describe('a committed target is never postponed', () => {
     expect(resolveTarget(nextBell, overdue, false)).toBeLessThan(Date.now())
   })
 
-  test('right after a fetch, Miniflux\'s default is replaced by our bell', () => {
-    // On that tick `currentNext` is Miniflux's entry-frequency default, not our
-    // plan -- keeping it would pin a sparse feed to Miniflux's rate.
-    const minifluxDefault = 1000 + 25 * 60 * 1000
+  test('right after a fetch, the fresh plan replaces the committed target', () => {
+    // On that tick `currentNext` is the stale commitment, not a real plan —
+    // keeping it would pin a sparse feed to its old rate.
+    const staleCommitment = 1000 + 25 * 60 * 1000
     const ourBell = 1000 + 6 * 60 * 60 * 1000
-    expect(resolveTarget(ourBell, minifluxDefault, true)).toBe(ourBell)
+    expect(resolveTarget(ourBell, staleCommitment, true)).toBe(ourBell)
   })
 
   test('a Retry-After floor is allowed to raise a target', () => {

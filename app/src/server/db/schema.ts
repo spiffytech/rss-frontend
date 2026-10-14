@@ -68,6 +68,10 @@ export const feeds = sqliteTable(
     lastModifiedHeader: text('last_modified_header'),
     checkedAt: integer('checked_at').$type<EpochMs>(),
     parsingErrorCount: integer('parsing_error_count').notNull().default(0),
+    /** Scheduler: committed next-fetch target (epoch-ms) and the origin's
+     *  floor from Retry-After / cache freshness (epoch-ms). */
+    nextCheckAt: integer('next_check_at').$type<EpochMs>(),
+    fetchAfterAt: integer('fetch_after_at').$type<EpochMs>(),
     disabled: integer('disabled', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at').$type<EpochMs>().notNull(),
   },

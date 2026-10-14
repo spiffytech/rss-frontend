@@ -23,6 +23,7 @@ function ok(body: string, over: Partial<Extract<FetchOutcome, { kind: 'ok' }>> =
     etag: 'W/"v1"',
     lastModified: null,
     finalUrl: 'https://a.example/feed',
+    freshnessMs: null,
     permanentlyMoved: false,
     fetchedAt: epochMs(NOW),
     ...over,
@@ -55,7 +56,7 @@ function setup(): { handle: ReaderHandle; feedId: FeedId } {
 test('ingest inserts new entries as unread and indexes them for search', () => {
   const { handle, feedId } = setup()
   const result = ingestFeedOutcome({ handle, feedId, outcome: ok(rssBody(item('g1', 'One', '<p>alpha body</p>') + item('g2', 'Two', '<p>beta</p>'))), now: NOW })
-  expect(result).toEqual({ kind: 'ok', inserted: 2, updated: 0, moved: false, iconUrl: null, siteUrl: 'https://a.example/' })
+  expect(result).toEqual({ kind: 'ok', inserted: 2, updated: 0, moved: false, iconUrl: null, siteUrl: 'https://a.example/', freshnessMs: null })
   const rows = handle.db.select().from(entries).all()
   expect(rows.map((r) => r.status)).toEqual(['unread', 'unread'])
   expect(rows.find((r) => r.title === 'One')!.readingTime).toBe(1)
@@ -68,7 +69,7 @@ test('refetch is idempotent and quiet', () => {
   const body = rssBody(item('g1', 'One', '<p>alpha</p>'))
   ingestFeedOutcome({ handle, feedId, outcome: ok(body), now: NOW })
   const second = ingestFeedOutcome({ handle, feedId, outcome: ok(body), now: NOW + 5_000 })
-  expect(second).toEqual({ kind: 'ok', inserted: 0, updated: 0, moved: false, iconUrl: null, siteUrl: 'https://a.example/' })
+  expect(second).toEqual({ kind: 'ok', inserted: 0, updated: 0, moved: false, iconUrl: null, siteUrl: 'https://a.example/', freshnessMs: null })
   expect(handle.db.select().from(entries).all()).toHaveLength(1)
 })
 
@@ -81,7 +82,7 @@ test('content changes update in place (changed_at moves, no duplicate)', () => {
     outcome: ok(rssBody(item('g1', 'One', '<p>alpha rewritten</p>'))),
     now: NOW + 5_000,
   })
-  expect(result).toEqual({ kind: 'ok', inserted: 0, updated: 1, moved: false, iconUrl: null, siteUrl: 'https://a.example/' })
+  expect(result).toEqual({ kind: 'ok', inserted: 0, updated: 1, moved: false, iconUrl: null, siteUrl: 'https://a.example/', freshnessMs: null })
   const row = handle.db.select().from(entries).all()[0]!
   expect(row.changedAt).toBe(epochMs(NOW + 5_000))
   expect(row.createdAt).toBe(epochMs(NOW)) // first-seen time preserved
@@ -97,7 +98,7 @@ test('removed entries never resurrect', () => {
   ingestFeedOutcome({ handle, feedId, outcome: ok(body), now: NOW })
   handle.sqlite.run("UPDATE entries SET status = 'removed'")
   const result = ingestFeedOutcome({ handle, feedId, outcome: ok(body), now: NOW + 5_000 })
-  expect(result).toEqual({ kind: 'ok', inserted: 0, updated: 0, moved: false, iconUrl: null, siteUrl: 'https://a.example/' })
+  expect(result).toEqual({ kind: 'ok', inserted: 0, updated: 0, moved: false, iconUrl: null, siteUrl: 'https://a.example/', freshnessMs: null })
   expect(handle.db.select().from(entries).all()[0]!.status).toBe('removed')
 })
 
@@ -111,7 +112,7 @@ test('errors bump parsing_error_count; success resets it; not-modified touches c
   let feed = handle.db.select().from(feeds).all()[0]!
   expect(feed.parsingErrorCount).toBe(1)
 
-  ingestFeedOutcome({ handle, feedId, outcome: { kind: 'not-modified', fetchedAt: epochMs(NOW + 1000) } })
+  ingestFeedOutcome({ handle, feedId, outcome: { kind: 'not-modified', fetchedAt: epochMs(NOW + 1000), freshnessMs: null } })
   feed = handle.db.select().from(feeds).all()[0]!
   expect(feed.checkedAt).toBe(epochMs(NOW + 1000))
   expect(feed.parsingErrorCount).toBe(1) // untouched by 304

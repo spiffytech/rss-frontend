@@ -1,5 +1,29 @@
 # External feed scheduler
 
+> **Ported into the reader (this repo's `app/`, `src/server/scheduler/`).** The
+> document below is kept as the design record of the original supervisor; the
+> port's deltas are:
+>
+> - **We fetch.** The old loop only wrote `feeds.next_check_at` and left fetching
+>   to Miniflux; the port owns both, so the control-model section (Miniflux
+>   rewrites `next_check_at` after every refresh, "loop period < min interval")
+>   is historical.
+> - **Cache hints are read, not decoded.** `decodeCacheHintMinutes` and
+>   `entryFrequencyIntervalMinutes` are gone: `Retry-After` and `Cache-Control` /
+>   `Expires` are read from the response and persisted as a floor in
+>   `feeds.fetch_after_at`. That closes the "short cache hints are unrecoverable"
+>   limit under *Known limits* — it existed only because Miniflux did the fetching.
+> - **No advisory lock, no `prev`/`hints` maps.** One process owns the SQLite
+>   file, and authorship of `next_check_at` is a fact rather than an inference —
+>   the cleanup the old runner's TODO asked for.
+> - Everything else ports verbatim: budget/EMA, bell placement, the jittered
+>   staleness ceiling, probe backoff on the unmodelled path only, and "a
+>   committed target is replaced only by an earlier one" (origin floors may push
+>   back).
+> - Ops unchanged: same env names (`SCHEDULER_*`, with the `MINIFLUX_*`
+>   overrides), `/health` 503 on a stale tick, `.scheduler-off` beside the DB
+>   pauses it, `SCHEDULER_ENABLED=0` disables it.
+
 Decides *when* each feed is fetched. Miniflux stays the fetcher, parser and
 store; we only write `feeds.next_check_at`. Not intended for upstream.
 

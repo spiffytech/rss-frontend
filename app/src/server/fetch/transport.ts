@@ -20,8 +20,10 @@ export type FetchOutcome =
       finalUrl: string
       permanentlyMoved: boolean
       fetchedAt: EpochMs
+      /** Cache freshness (max-age / Expires): a "not before" hint, ms. */
+      freshnessMs: number | null
     }
-  | { kind: 'not-modified'; fetchedAt: EpochMs }
+  | { kind: 'not-modified'; fetchedAt: EpochMs; freshnessMs: number | null }
   | { kind: 'rate-limited'; retryAfterMs: number | null; fetchedAt: EpochMs }
   | { kind: 'error'; message: string; httpStatus: number | null; fetchedAt: EpochMs }
 
@@ -35,6 +37,22 @@ function parseRetryAfter(value: string | null): number | null {
   if (Number.isFinite(seconds)) return Math.max(0, seconds * 1000)
   const at = Date.parse(value)
   return Number.isNaN(at) ? null : Math.max(0, at - Date.now())
+}
+
+/** Cache freshness: `max-age`, else `Expires` minus now. Null = the origin
+ *  promised nothing. Honoured as a floor, never as a target. */
+function parseFreshnessMs(headers: Headers): number | null {
+  const cc = headers.get('cache-control')
+  if (cc) {
+    const m = /max-age=(\d+)/i.exec(cc)
+    if (m) return Math.max(0, Number(m[1]) * 1000)
+  }
+  const exp = headers.get('expires')
+  if (exp) {
+    const at = Date.parse(exp)
+    if (!Number.isNaN(at)) return Math.max(0, at - Date.now())
+  }
+  return null
 }
 
 async function readCapped(response: Response, maxBytes: number, fetchedAt: EpochMs): Promise<Uint8Array | FetchOutcome> {
@@ -98,7 +116,7 @@ export async function fetchFeed(
       return { kind: 'error', message: String(error), httpStatus: null, fetchedAt }
     }
 
-    if (response.status === 304) return { kind: 'not-modified', fetchedAt }
+    if (response.status === 304) return { kind: 'not-modified', fetchedAt, freshnessMs: parseFreshnessMs(response.headers) }
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get('location')
       if (!location) return { kind: 'error', message: `redirect without location (HTTP ${response.status})`, httpStatus: response.status, fetchedAt }
@@ -110,7 +128,7 @@ export async function fetchFeed(
       }
       continue
     }
-    if (response.status === 304) return { kind: 'not-modified', fetchedAt }
+    if (response.status === 304) return { kind: 'not-modified', fetchedAt, freshnessMs: parseFreshnessMs(response.headers) }
     if (response.status === 429 || response.status === 503) {
       return { kind: 'rate-limited', retryAfterMs: parseRetryAfter(response.headers.get('retry-after')), fetchedAt }
     }
@@ -128,6 +146,7 @@ export async function fetchFeed(
       finalUrl: current,
       permanentlyMoved,
       fetchedAt,
+      freshnessMs: parseFreshnessMs(response.headers),
     }
   }
   return { kind: 'error', message: `too many redirects (>${MAX_REDIRECTS})`, httpStatus: null, fetchedAt }

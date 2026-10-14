@@ -1,7 +1,6 @@
 /**
  * Redact anything shaped like `scheme://user:pass@host` before it leaves the
- * box. Tick errors are forwarded to a third-party ntfy topic, and Postgres
- * connection errors can embed the DSN. Over-redacting is the right trade.
+ * box. Over-redacting is the right trade. Ported verbatim from the retired app.
  */
 function scrub(s: string): string {
   return s.replace(/\b([a-z][a-z0-9+.-]*:\/\/)[^\s@]+@/gi, '$1[redacted]@')

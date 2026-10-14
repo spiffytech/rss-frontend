@@ -23,8 +23,8 @@ import { fetchFeed } from './transport'
 import { ensureFeedIcon } from './icons'
 
 export type IngestResult =
-  | { kind: 'ok'; inserted: number; updated: number; moved: boolean; iconUrl: string | null; siteUrl: string | null }
-  | { kind: 'not-modified' }
+  | { kind: 'ok'; inserted: number; updated: number; moved: boolean; iconUrl: string | null; siteUrl: string | null; freshnessMs: number | null }
+  | { kind: 'not-modified'; freshnessMs: number | null }
   | { kind: 'rate-limited'; retryAfterMs: number | null }
   | { kind: 'error'; message: string }
 
@@ -74,7 +74,7 @@ export function ingestFeedOutcome(opts: {
 
   if (outcome.kind === 'not-modified') {
     db.update(feeds).set({ checkedAt: outcome.fetchedAt }).where(eq(feeds.id, feed.id)).run()
-    return { kind: 'not-modified' }
+    return { kind: 'not-modified', freshnessMs: outcome.freshnessMs }
   }
 
   if (outcome.kind === 'error') {
@@ -186,6 +186,7 @@ export function ingestFeedOutcome(opts: {
     moved,
     iconUrl: parsed.iconUrl,
     siteUrl: parsed.siteUrl,
+    freshnessMs: outcome.freshnessMs,
   }
 }
 

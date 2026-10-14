@@ -15,7 +15,6 @@ import { readSession, writeSession, clearSession } from './lib/auth'
 import { minifluxContext } from './lib/miniflux'
 import { requestContext } from './lib/request-context'
 import { loadConfig } from './lib/config'
-import { isTickStale } from './lib/schedule/heartbeat'
 import { minifluxProvider } from './providers/miniflux'
 import { createProviderRoutes } from './providers/routes'
 
@@ -100,13 +99,6 @@ export function buildApp() {
         probe.close()
       } catch {
         return c.json({ status: 'unhealthy', reason: 'prefs database unavailable' }, 503)
-      }
-      // The scheduler runs as a setInterval inside this process, so a silently
-      // stalled loop would otherwise pass this check forever while the instance
-      // quietly reverted to Miniflux's own entry_frequency. Only enforced once
-      // the scheduler is actually enabled, so a DB-less dev boot stays healthy.
-      if (isTickStale(cfg.schedule.maxTickAgeMinutes)) {
-        return c.json({ status: 'unhealthy', reason: 'scheduler tick is stale' }, 503)
       }
       return c.json({ status: 'ok' })
     })
