@@ -146,5 +146,12 @@ Non-obvious tooling facts (all learned the hard way):
   a passwordless account on the public login form.
 
 The NEW app lives in `app/` — `cd app && bun run dev` (it reads `../data/reader.sqlite`).
-The repo-root `bun run dev` starts the OLD Vue/Miniflux app, which shows an empty
-reader now that Miniflux is retired. Root scripts stay until the final flatten/rename.
+The repo-root `bun run dev` does the same thing (`cd app && bun run dev`), so both
+commands boot the reader. The old Vue scripts (`vite`, `dev:server`) still exist
+but point at the retired Miniflux app; they go at the final flatten/rename.
+
+The scheduler lives in `app/src/server/scheduler/` and is ON by default: it
+polls feeds on learned bells, appends arrivals to the open view, and reports
+`/health` 503 when a tick goes stale. Pause at runtime with
+`touch data/.scheduler-off`; disable with `SCHEDULER_ENABLED=0`. Design doc +
+port deltas: `docs/feed-scheduler.md`.
