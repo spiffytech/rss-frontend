@@ -60,10 +60,13 @@ beforeAll(async () => {
     'INSERT INTO feeds (id, user_id, category_id, title, feed_url, site_url, created_at) VALUES (?, ?, (SELECT id FROM categories), ?, ?, ?, ?)',
     [feedId, userId, 'Blog', 'https://example.com/feed', 'https://example.com/', now],
   )
+  // A hostile TITLE, not just hostile content: titles are rendered as text, so
+  // nothing here may become markup or execute. (TITLE-XSS-MARKER locates it.)
+  const HOSTILE_TITLE = '<img src=x onerror="window.__titleXss=1"> TITLE-XSS-MARKER'
   handle.sqlite.run(
     `INSERT INTO entries (id, user_id, feed_id, hash, title, url, content, published_at, created_at, changed_at)
-     VALUES (?, ?, ?, 'h1', 'Hostile entry', 'https://xkcd.com/927/', ?, ?, ?, ?)`,
-    [newEntryId(now), userId, feedId, HOSTILE_HTML, now, now, now],
+     VALUES (?, ?, ?, 'h1', ?, 'https://xkcd.com/927/', ?, ?, ?, ?)`,
+    [newEntryId(now), userId, feedId, HOSTILE_TITLE, HOSTILE_HTML, now, now, now],
   )
   // A window's worth of plain rows (VIEW_PAGE_SIZE = 100) so the sentinel has a
   // second page to pull and auto-read has entries to scroll past.
@@ -250,6 +253,15 @@ it(
           // becomes a visible caption, and the tooltip is dropped.
           comicCaption: content ? (content.querySelector('figcaption')?.textContent ?? null) : null,
           comicImgTitle: content?.querySelector('figure img')?.getAttribute('title') ?? null,
+          // Titles are text: a hostile title must not create elements or run.
+          titleText: (() => {
+            const a = [...document.querySelectorAll('.msubject')].find((el) =>
+              (el.textContent ?? '').includes('TITLE-XSS-MARKER'),
+            )
+            return a ? a.textContent : null
+          })(),
+          titleImg: !!document.querySelector('.msubject img'),
+          titleXss: !!window.__titleXss,
           linkHref: link ? link.getAttribute('href') : null,
           warnEmoji: /\\u26A0\\uFE0F/.test(document.body.textContent ?? ''),
           warnBare: /\\u26A0(?!\\uFE0F)/.test(document.body.textContent ?? ''),
@@ -285,6 +297,9 @@ it(
       liteStyled: boolean
       comicCaption: string | null
       comicImgTitle: string | null
+      titleText: string | null
+      titleImg: boolean
+      titleXss: boolean
       linkHref: string | null
       warnEmoji: boolean
       warnBare: boolean
@@ -360,6 +375,10 @@ it(
     expect(report.liteStyled).toBe(true) // …and its stylesheet loaded (poster visible)
     expect(report.comicCaption).toBe('Alt text: the comic joke') // xkcd alt text rendered
     expect(report.comicImgTitle).toBe(null) // …and the tooltip dropped (MF parity)
+    // A title is never markup: the tag stays text, no element appears, nothing runs.
+    expect(report.titleText).toContain('<img src=x onerror=')
+    expect(report.titleImg).toBe(false)
+    expect(report.titleXss).toBe(false)
     expect(report.linkHref).toBe('https://example.com/relative') // relative → absolute against feed base
     // fetch-error glyph: yellow ⚠️ (emoji presentation), never a bare/text ⚠ (renders red).
     expect(report.warnEmoji).toBe(true)

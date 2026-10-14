@@ -253,10 +253,14 @@ function parseAtom(parsed: unknown, feedUrl: string, now: number, jitter: () => 
       contentItems: [{ type: textOf(entry.content).includes('<') ? 'text/html' : 'text/plain', value: textOf(entry.content) }],
       summary: textOf(entry.summary),
     })
-    const author = arr(entry.authors).map((a) => str(rec(a).name)).find((v) => v !== '') ?? null
+    const author = htmlUnescape(arr(entry.authors).map((a) => str(rec(a).name)).find((v) => v !== '') ?? '') || null
     return {
       hash: atomEntryHash({ id, originalLink }),
-      title: textOf(entry.title),
+      // Atom `type="html"` titles carry HTML, and this feed ships it inside
+      // CDATA: the XML layer decodes nothing in CDATA, so `&#8217;` arrives as
+      // literal text. Titles are rendered as text, so decode it here. Miniflux
+      // does the same for CDATA titles (atom10Text.title).
+      title: htmlUnescape(textOf(entry.title)),
       url: url === '' ? null : url,
       commentsUrl: null,
       author,
@@ -267,7 +271,7 @@ function parseAtom(parsed: unknown, feedUrl: string, now: number, jitter: () => 
     }
   })
 
-  return { title: textOf(feed.title), siteUrl: siteUrl || null, iconUrl: resolveIcon(feed, siteUrl || null, feedUrl), items: capEntries(items) }
+  return { title: htmlUnescape(textOf(feed.title)), siteUrl: siteUrl || null, iconUrl: resolveIcon(feed, siteUrl || null, feedUrl), items: capEntries(items) }
 }
 
 // --- RDF / RSS 1.0 ---------------------------------------------------------

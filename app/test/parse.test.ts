@@ -186,3 +186,34 @@ describe('parse: author and Dublin Core fields', () => {
     expect(parse(rdf('<dc:creator>Chan</dc:creator>', '')).author).toBe('Chan')
   })
 })
+
+// Atom `type="html"` titles are HTML, and publishers escape them: the XML layer
+// decodes one level, leaving a literal `&#8217;` that would otherwise be shown
+// as text in the reader (brucelawson.co.uk).
+describe('parse: text encoding', () => {
+  test('Atom: type=html titles and feed title are entity-decoded', () => {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="html">Bruce Lawson&amp;#039;s personal site</title>
+  <link href="https://brucelawson.co.uk/"/>
+  <entry>
+    <title type="html">EU, EU, It&amp;#8217;s off to work we go</title>
+    <link href="https://brucelawson.co.uk/2026/eu-eu-its-off-to-work-we-go/"/>
+    <id>tag:brucelawson.co.uk,2026:1</id>
+    <updated>2025-01-02T03:04:05Z</updated>
+  </entry>
+</feed>`
+    const feed = parseFeedBody(xml, 'https://brucelawson.co.uk/feed/atom/', opts)
+    expect(feed.title).toBe("Bruce Lawson's personal site") // &#039; is U+0027
+    expect(feed.items[0]!.title).toBe('EU, EU, It\u2019s off to work we go')
+  })
+
+  test('Atom: a plain-text title is left alone', () => {
+    const xml = `<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Plain</title>
+  <entry><title>Rust &amp; C++</title><id>1</id><link href="https://a.example/1"/></entry>
+</feed>`
+    expect(parseFeedBody(xml, 'https://a.example/feed', opts).items[0]!.title).toBe('Rust & C++')
+  })
+})
