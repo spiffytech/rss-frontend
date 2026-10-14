@@ -1,6 +1,7 @@
 import { expect, test } from 'bun:test'
 
 import { GLOBAL_ATTRS, POLICY, safeUrlProtocol, toDomPurifyConfig, toSanitizerConfig } from '../src/client/display/policy'
+import { usesAddImageTitle } from '../src/client/display/rewrites'
 import { parseYouTubeUrl } from '../src/client/display/youtube'
 
 test('YouTube URL shapes all resolve to one embed', () => {
@@ -63,4 +64,14 @@ test('script-capable elements are absent from the policy', () => {
   for (const banned of ['script', 'style', 'iframe', 'object', 'embed', 'link', 'meta', 'form', 'input', 'svg', 'math']) {
     expect(POLICY[banned]).toBeUndefined()
   }
+})
+
+test('add_image_title keys off the entry URL domain, as Miniflux does', () => {
+  expect(usesAddImageTitle('https://xkcd.com/927/')).toBe(true)
+  expect(usesAddImageTitle('https://www.xkcd.com/927/')).toBe(true) // www stripped
+  expect(usesAddImageTitle('https://explainxkcd.com/wiki/index.php/927')).toBe(true)
+  expect(usesAddImageTitle('https://example.com/xkcd.com/927')).toBe(false) // path, not host
+  expect(usesAddImageTitle('https://notxkcd.com/927/')).toBe(false)
+  expect(usesAddImageTitle(null)).toBe(false)
+  expect(usesAddImageTitle('not a url')).toBe(false)
 })

@@ -43,6 +43,13 @@ const textOf = (v: unknown): string => {
   return ''
 }
 const arr = (v: unknown): unknown[] => (Array.isArray(v) ? v : [])
+/** First non-empty string in a feedsmith field. feedsmith pluralizes Dublin
+ *  Core and author elements into arrays (`dc.creators`, `authors`), so every
+ *  read of those must go through this. */
+const first = (v: unknown): string => arr(v).map((x) => str(x)).find((x) => x !== '') ?? ''
+/** feedsmith's person shape (`{ name, email }`), mirroring Miniflux's
+ *  PersonName: the name wins, the address is the fallback. */
+const personName = (v: unknown): string => str(rec(v).name) || str(rec(v).email)
 const dateOf = (v: unknown): Date | null => {
   if (v instanceof Date) return v
   if (typeof v === 'string' || typeof v === 'number') {
@@ -149,7 +156,9 @@ function parseRss(parsed: unknown, feedUrl: string, now: number, jitter: () => n
     const url = resolved || siteUrl || resolveUrl(siteUrl, enclosureUrl)
 
     // MF's content selection for identity: dc:content → description →
-    // googleplay:description → itunes:summary → itunes:subtitle.
+    // googleplay:description → itunes:summary → itunes:subtitle. feedsmith
+    // exposes no dc:content, so that first term is inert; MF only reads it on
+    // feeds using the non-standard element.
     const hashContent = [
       textOf(dc.content),
       str(item.description),
@@ -160,7 +169,7 @@ function parseRss(parsed: unknown, feedUrl: string, now: number, jitter: () => n
 
     // MF's title chain: dc:title → title (trimmed, double-unescaped) →
     // truncated content → entry URL.
-    let title = htmlUnescape(htmlUnescape([str(dc.title), str(item.title)].find((v) => v !== '') ?? '').trim())
+    let title = htmlUnescape(htmlUnescape([first(dc.titles), str(item.title)].find((v) => v !== '') ?? '').trim())
     if (title === '') title = truncateHtmlText(hashContent, 100)
     if (title === '') title = url
 
@@ -189,11 +198,23 @@ function parseRss(parsed: unknown, feedUrl: string, now: number, jitter: () => n
       title: m.title,
       url: m.url === '' ? null : m.url,
       commentsUrl: comments !== '' && /^https?:\/\//i.test(comments) ? comments : null,
-      author: [str(m.item.author), str(m.dc.creator), str(rec(parsed).author ?? rec(parsed).managingEditor)].find((v) => v !== '') ?? null,
+      // MF's findEntryAuthor chain, then its findFeedAuthor fallback.
+      author:
+        [
+          str(rec(m.item.googleplay).author),
+          str(rec(m.item.itunes).author),
+          first(m.dc.creators),
+          arr(m.item.authors).map(personName).find((v) => v !== '') ?? '',
+          str(rec(feed.itunes).author),
+          str(rec(feed.googleplay).author),
+          personName(rec(feed.itunes).owner),
+          personName(feed.managingEditor),
+          str(feed.webMaster ?? feed.webmaster),
+        ].find((v) => v !== '') ?? null,
       content,
-      publishedAt: clampStoryDate(dateOf(m.item.pubDate ?? m.dc.date), now, jitter),
+      publishedAt: clampStoryDate(dateOf(m.item.pubDate ?? (first(m.dc.dates) || undefined)), now, jitter),
       tags: arr(m.item.categories).map((c) => (typeof c === 'string' ? c : str(rec(c).name))).filter((t) => t !== ''),
-      language: [str(m.dc.language), feedLanguage].find((v) => v !== '') || null,
+      language: [first(m.dc.languages), feedLanguage].find((v) => v !== '') || null,
     }
   })
 
@@ -259,23 +280,24 @@ function parseRdf(parsed: unknown, feedUrl: string, now: number, jitter: () => n
     const item = rec(raw)
     const dc = rec(item.dc)
     const link = resolveUrl(siteUrl, str(item.link))
-    const title = htmlUnescape(str(item.title).trim())
+    const title = htmlUnescape((str(item.title) || first(dc.titles)).trim())
     const description = str(item.description)
     return {
       hash: rdfEntryHash({ link: str(item.link), title, description }),
       title: title === '' ? link : title,
       url: link === '' ? null : link,
       commentsUrl: null,
-      author: str(dc.creator) || null,
+      // MF's RDF chain: item dc:creator → channel dc:creator.
+      author: [first(dc.creators), first(rec(feed.dc).creators)].find((v) => v !== '') ?? null,
       content: chooseContent({
         contentItems: [
           { type: textOf(item.content).includes('<') ? 'text/html' : 'text/plain', value: textOf(item.content) },
         ],
         summary: description,
       }),
-      publishedAt: clampStoryDate(dateOf(dc.date), now, jitter),
+      publishedAt: clampStoryDate(dateOf(first(dc.dates) || undefined), now, jitter),
       tags: [],
-      language: str(dc.language) || null,
+      language: first(dc.languages) || null,
     }
   })
 

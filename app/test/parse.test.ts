@@ -134,3 +134,55 @@ describe('parse pipeline (feedsmith + quirks + MF hashes)', () => {
     expect(feed.items[0]!.content).toBe('<p>hi</p>')
   })
 })
+
+// feedsmith pluralizes the author and Dublin Core elements (`authors`,
+// `dc.creators`), so reading the singular names silently yields nothing. These
+// cover Miniflux's own chains, which the imported data came from.
+describe('parse: author and Dublin Core fields', () => {
+  const rss = (channel: string, items: string) => `<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:googleplay="http://www.google.com/schemas/play-podcasts/1.0">
+  <channel><title>Blog</title><link>https://a.example/</link>${channel}${items}</channel>
+</rss>`
+
+  const item = (body: string) => parseFeedBody(rss('', `<item><title>X</title><link>https://a.example/x</link>${body}</item>`), 'https://a.example/feed', opts).items[0]!
+
+  test('RSS: a plain-text <author> is the submitter (lobste.rs shape)', () => {
+    expect(item('<author>purplesyringa.moe via valdemar</author>').author).toBe('purplesyringa.moe via valdemar')
+  })
+
+  test('RSS: "email (Name)" keeps the name, as MF PersonName does', () => {
+    expect(item('<author>plain@e.com (Plain Name)</author>').author).toBe('Plain Name')
+  })
+
+  test('RSS: dc:creator and itunes:author outrank <author> (MF order)', () => {
+    expect(item('<author>plain@e.com</author><dc:creator>Alice</dc:creator>').author).toBe('Alice')
+    expect(item('<dc:creator>Alice</dc:creator><itunes:author>Podcast Host</itunes:author>').author).toBe('Podcast Host')
+  })
+
+  test('RSS: falls back to the channel author (MF findFeedAuthor)', () => {
+    const feed = parseFeedBody(
+      rss('<managingEditor>me@e.com (Editor)</managingEditor>', '<item><title>X</title><link>https://a.example/x</link></item>'),
+      'https://a.example/feed',
+      opts,
+    )
+    expect(feed.items[0]!.author).toBe('Editor')
+  })
+
+  test('RSS: dc:date, dc:language and dc:title are read', () => {
+    const one = item('<dc:date>2025-01-02T03:04:05Z</dc:date><dc:language>en</dc:language><dc:title>Dublin</dc:title>')
+    expect(one.publishedAt).toBe(epochMs(Date.parse('2025-01-02T03:04:05Z')))
+    expect(one.language).toBe('en')
+    expect(one.title).toBe('Dublin')
+  })
+
+  test('RDF: item dc:creator, falling back to the channel', () => {
+    const rdf = (channel: string, body: string) => `<?xml version="1.0"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel rdf:about="https://a.example/"><title>Blog</title><link>https://a.example/</link>${channel}</channel>
+  <item rdf:about="https://a.example/x"><title>X</title><link>https://a.example/x</link><description>d</description>${body}</item>
+</rdf:RDF>`
+    const parse = (xml: string) => parseFeedBody(xml, 'https://a.example/feed', opts).items[0]!
+    expect(parse(rdf('', '<dc:creator>Bob</dc:creator>')).author).toBe('Bob')
+    expect(parse(rdf('<dc:creator>Chan</dc:creator>', '')).author).toBe('Chan')
+  })
+})
