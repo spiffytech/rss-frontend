@@ -42,7 +42,11 @@
       .then((c) => {
         sinkEntryContent(
           contentEl!,
-          transformEntryContent(c.content, c.feedBaseUrl ?? entry.url ?? 'https://invalid.invalid/'),
+          transformEntryContent(
+            c.content,
+            c.feedBaseUrl ?? entry.url ?? 'https://invalid.invalid/',
+            entry.url,
+          ),
         )
         // List-view expansion animates once the body is real (old app animated
         // the mounted body; ours loads lazily, so animate on arrival).
@@ -115,11 +119,13 @@
     if (el.closest('button')) return
     // Links open normally; clicks inside an expanded body don't fold it.
     if (!el.closest('a') && !el.closest('.reading')) {
-      if (viewMode === 'list') toggleExpanded(entry.id)
-      // Clicking an entry is explicit: mark read even when mark-read-on-scroll
-      // is disabled for the feed, and even in list view.
-      autoRead(entry.id, false, { ignoreFeedSetting: true, explicit: true })
+      toggleExpanded(entry.id)
+      return
     }
+    // Clicking an entry is explicit: mark read even when mark-read-on-scroll
+    // is disabled for the feed, and even in list view (autoRead owns the
+    // keep-unread/search guards).
+    autoRead(entry.id, false, { ignoreFeedSetting: true, explicit: true })
   }
 </script>
 

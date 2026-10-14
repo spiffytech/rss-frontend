@@ -16,11 +16,11 @@ export type FeedPrefs = {
   viewMode?: 'expanded' | 'list'
   sort?: 'oldest' | 'newest'
   hideReadItems?: boolean
-  /** Read-time suppression: literal, case-insensitive, per feed. */
-  hiddenKeywords?: string[]
-  hiddenAuthors?: string[]
-  hiddenTags?: string[]
 }
+
+/** Hide feeds with nothing unread. The old app defaulted this to true
+ *  (`ref(true)` + `hideEmptyFeeds ?? true`); an unset pref must not flip it. */
+export const DEFAULT_HIDE_EMPTY_FEEDS = true
 
 /** Global view defaults are hardcoded until a global preference UI exists. */
 export const DEFAULT_VIEW_MODE = 'expanded' as const

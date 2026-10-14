@@ -16,11 +16,12 @@
   // on hover, because hover does not exist on a touchscreen.
   import { computePopoverPlacement } from '../../shared/popover.js'
   import { autofocus } from '../actions.js'
+  import { DEFAULT_HIDE_EMPTY_FEEDS } from '../../shared/prefs.js'
   import { createSearch } from '../search.svelte.js'
   import {
     appState,
     markDisplayed,
-    refresh,
+    refreshFeeds,
     reloadEntries,
     setFilter,
     setHideReadItems,
@@ -154,7 +155,7 @@
     }
   }
 
-  const onRefresh = () => runAndClose(() => refresh())
+  const onRefresh = () => runAndClose(() => refreshFeeds())
   const onViewMode = () =>
     runAndClose(() => setViewMode(appState.viewModeOverride === 'expanded' ? 'list' : 'expanded'))
   const onSort = () =>
@@ -164,14 +165,6 @@
   const onHideReadItems = () =>
     runAndClose(() => setHideReadItems(!(appState.filter.hideReadItems ?? true)))
   const onClearSearch = () => runAndClose(() => search.clearSearch())
-
-  // The one intentional addition to the original design surface: the plan's
-  // per-feed filter editor lives behind a row in this menu (the menu is "every-
-  // thing you can do to the current view", so it fits the existing concept).
-  async function onFilterEntries() {
-    closePanel()
-    await goto(feedId ? `/settings?feed=${feedId}` : '/settings')
-  }
 
   function startRename() {
     renameTitle = currentTitle()
@@ -188,7 +181,7 @@
     const title = renameTitle.trim()
     if (id == null || id === '' || !title) return
     await api.renameFeed(id as never, title)
-    await refresh()
+    appState.panel = await api.panel() // lists update in place — no reload/scroll reset
     renameOpen = false
     closePanel()
   }
@@ -343,15 +336,14 @@
             >
               Auto-read: {autoReadOff ? 'disabled' : 'enabled'}
             </button>
-            <button type="button" class="menu-row" onclick={onFilterEntries}>Filter entries…</button>
           {/if}
           <button
             type="button"
-            class="menu-row {appState.userPrefs.hideEmptyFeeds ? TOGGLE_ON : ''}"
-            aria-pressed={appState.userPrefs.hideEmptyFeeds === true}
+            class="menu-row {(appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? TOGGLE_ON : ''}"
+            aria-pressed={(appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) === true}
             onclick={onHideEmptyFeeds}
           >
-            Empty feeds: {appState.userPrefs.hideEmptyFeeds ? 'hidden' : 'shown'}
+            Empty feeds: {(appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? 'hidden' : 'shown'}
           </button>
           <button
             type="button"

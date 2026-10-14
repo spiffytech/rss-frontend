@@ -4,7 +4,7 @@ import type { SQLQueryBindings } from 'bun:sqlite'
 import { openDatabase, type ReaderHandle } from '../src/server/db'
 import { categories } from '../src/server/db/schema'
 import { rebuildEntrySearch } from '../src/server/db/search-sync'
-import { markEntries, setFeedPrefs, setStarred, setUserPrefs } from '../src/server/query/mutations'
+import { markEntries, setStarred, setUserPrefs } from '../src/server/query/mutations'
 import { getEntryContent, panel, queryView } from '../src/server/query/views'
 import { epochMs, newCategoryId, newEntryId, newFeedId, newUserId, type EntryId, type FeedId, type UserId } from '../src/shared/ids'
 
@@ -13,7 +13,7 @@ const NOW = 1_750_000_000_000
 const view = (db: Parameters<typeof queryView>[0], opts: Parameters<typeof queryView>[1]) =>
   queryView(db, opts).entries
 
-type Fixture = { handle: ReaderHandle; userId: UserId; feedA: FeedId; feedB: FeedId; hiddenEntry: EntryId; stubId: EntryId }
+type Fixture = { handle: ReaderHandle; userId: UserId; feedA: FeedId; feedB: FeedId; stubId: EntryId }
 
 function setup(): Fixture {
   const handle = openDatabase(':memory:')
@@ -37,31 +37,27 @@ function setup(): Fixture {
   const e1 = newEntryId(epochMs(NOW)) // unread A
   const e2 = newEntryId(epochMs(NOW + 1)) // read A
   const e3 = newEntryId(epochMs(NOW + 2)) // unread B
-  const hiddenEntry = newEntryId(epochMs(NOW + 3)) // unread A, keyword-hidden
   const stubId = newEntryId(epochMs(NOW + 4)) // removed A
   add(e1, feedA, { title: 'alpha launch', content: '<p>first post</p>' })
   add(e2, feedA, { title: 'beta reveal', content: '<p>alpha content</p>', status: 'read', author: 'Dana' })
   add(e3, feedB, { title: 'gamma update', content: '<p>third</p>', tags: '["spoiler"]' })
-  add(hiddenEntry, feedA, { title: 'buy now', content: '<p>alpha spam</p>' })
   add(stubId, feedA, { title: '', content: '', status: 'removed' })
 
-  setFeedPrefs(handle.db, userId, feedA, { hiddenKeywords: ['buy now'] })
   // the fixture inserts bypass the app-maintained write path — index explicitly
   rebuildEntrySearch(handle.sqlite)
-  return { handle, userId, feedA, feedB, hiddenEntry, stubId }
+  return { handle, userId, feedA, feedB, stubId }
 }
 
-test('default view: unread only, hidden rows and soft-deleted rows absent', () => {
-  const { handle, userId, hiddenEntry, stubId } = setup()
+test('default view: unread only, soft-deleted rows absent', () => {
+  const { handle, userId, stubId } = setup()
   const rows = view(handle.db, { userId, filter: {} })
   const ids = rows.map((r) => r.id)
-  expect(ids).toHaveLength(2) // e1 + e3; e2 read, hiddenEntry filtered, stub removed
-  expect(ids).not.toContain(hiddenEntry)
+  expect(ids).toHaveLength(2) // e1 + e3; e2 read, stub removed
   expect(ids).not.toContain(stubId)
   expect(rows.map((r) => r.title).sort()).toEqual(['alpha launch', 'gamma update'])
 })
 
-test('hideReadItems=false brings read rows back (hidden stays hidden)', () => {
+test('hideReadItems=false brings read rows back', () => {
   const { handle, userId } = setup()
   const rows = view(handle.db, { userId, filter: { hideReadItems: false } })
   expect(rows.map((r) => r.title).sort()).toEqual(['alpha launch', 'beta reveal', 'gamma update'])
@@ -85,6 +81,23 @@ test('search spans read and unread by default; toggle narrows to unread', () => 
   expect(unread.map((r) => r.title)).toEqual(['alpha launch'])
 })
 
+test('search lists unread matches first, newest-first within each bucket', () => {
+  const { handle, userId } = setup()
+  const rows = view(handle.db, { userId, filter: { search: 'alpha' } })
+  expect(rows.map((r) => r.status)).toEqual(['unread', 'read'])
+  expect(rows.map((r) => r.title)).toEqual(['alpha launch', 'beta reveal'])
+})
+
+test('search pages across the unread/read boundary with no skips or repeats', () => {
+  const { handle, userId } = setup()
+  const page1 = queryView(handle.db, { userId, filter: { search: 'alpha' }, limit: 1 })
+  expect(page1.entries.map((r) => r.title)).toEqual(['alpha launch'])
+  expect(page1.nextCursor?.bucket).toBe(0)
+  const page2 = queryView(handle.db, { userId, filter: { search: 'alpha' }, limit: 1, cursor: page1.nextCursor })
+  expect(page2.entries.map((r) => r.title)).toEqual(['beta reveal'])
+  expect(page2.nextCursor).toBeNull()
+})
+
 test('search: exclusion-only input and type-ahead prefixes work', () => {
   const { handle, userId } = setup()
   const minusOne = view(handle.db, { userId, filter: { search: '-gamma', hideReadItems: false } })
@@ -97,34 +110,41 @@ test('counters share the list predicate exactly', () => {
   const { handle, userId, feedA } = setup()
   const p = panel(handle.db, { userId, hideEmptyFeeds: false })
   const listUnread = view(handle.db, { userId, filter: { feedId: feedA } }).length
-  expect(p.counters[feedA]).toBe(listUnread) // hidden row not counted either
+  expect(p.counters[feedA]).toBe(listUnread) // counters share the list predicate exactly
   expect(p.counters[feedA!]).toBe(1)
   expect(p.categories[0]!.totalUnread).toBe(2)
 })
 
 test('markEntries touches exactly the passed ids and never removed rows', () => {
-  const { handle, userId, hiddenEntry, stubId } = setup()
+  const { handle, userId, stubId } = setup()
   const visible = view(handle.db, { userId, filter: {} }).map((r) => r.id)
   const changed = markEntries(handle.db, { userId, entryIds: visible, status: 'read' })
   expect(changed).toBe(2)
-  // hidden rows are absent from every view (so never in a fetched ID set) and
-  // stay untouched in the DB; stubs are never touched either
-  expect(view(handle.db, { userId, filter: { hideReadItems: false } }).map((r) => r.id)).not.toContain(hiddenEntry)
-  const hiddenStatus = handle.sqlite
-    .query<{ status: string }, SQLQueryBindings[]>('SELECT status FROM entries WHERE id = ?')
-    .get(hiddenEntry)!
-  expect(hiddenStatus.status).toBe('unread')
+  // stubs are never touched
   const changedStub = markEntries(handle.db, { userId, entryIds: [stubId], status: 'read' })
   expect(changedStub).toBe(0)
 })
 
-test('entry content loads per card and hidden rows still resolve (raw HTML)', () => {
-  const { handle, userId, hiddenEntry } = setup()
+test('entry content loads per card (raw HTML)', () => {
+  const { handle, userId } = setup()
   const [first] = view(handle.db, { userId, filter: {} })
   const content = getEntryContent(handle.db, { userId, entryId: first!.id })
   expect(content!.content).toBe('<p>first post</p>')
-  // hidden from lists but still fetchable by id (it exists; filters are display-time)
-  expect(getEntryContent(handle.db, { userId, entryId: hiddenEntry })).not.toBeNull()
+})
+
+test("panel keeps the view's feed in the sidebar even with nothing unread", () => {
+  const { handle, userId, feedA, feedB } = setup()
+  // Read everything: both feeds now have nothing unread, so hideEmptyFeeds hides them.
+  markEntries(handle.db, { userId, entryIds: view(handle.db, { userId, filter: {} }).map((r) => r.id), status: 'read' })
+  const none = panel(handle.db, { userId, hideEmptyFeeds: true })
+  expect(none.feeds.find((f) => f.id === feedA)).toBeUndefined()
+  expect(none.feeds.find((f) => f.id === feedB)).toBeUndefined()
+
+  // …but the view's own feed stays in the list, so the sidebar can keep it
+  // selected and the header can name it.
+  const viewing = panel(handle.db, { userId, hideEmptyFeeds: true, currentFeed: feedA })
+  expect(viewing.feeds.find((f) => f.id === feedA)?.title).toBe('Feed A')
+  expect(viewing.feeds.find((f) => f.id === feedB)).toBeUndefined()
 })
 
 test('user prefs round-trip and merge', () => {
@@ -148,7 +168,7 @@ test('view windows page by keyset: no skips, no repeats, even on timestamp ties'
   expect(page1.entries).toHaveLength(2)
   expect(page1.nextCursor).not.toBeNull()
   const page2 = queryView(handle.db, { ...opts, limit: 2, cursor: page1.nextCursor })
-  // hidden and removed rows never appear: 3 visible total, so page 2 is the tail
+  // removed rows never appear: 3 visible total, so page 2 is the tail
   expect(page2.entries).toHaveLength(1)
   expect(page2.nextCursor).toBeNull() // end of the view — do NOT fetch again
   const ids = [...page1.entries, ...page2.entries].map((e) => e.id)

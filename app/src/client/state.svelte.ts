@@ -8,7 +8,7 @@
 import { api } from './api.js'
 import { computeUnreadCount } from '../shared/util.js'
 import { clampNavIndex, shouldAutoRead } from '../shared/reading.js'
-import {
+import { DEFAULT_HIDE_EMPTY_FEEDS,
   DEFAULT_HIDE_READ_ITEMS,
   DEFAULT_SORT,
   DEFAULT_VIEW_MODE,
@@ -32,6 +32,11 @@ export const appState = $state({
   // reading session (client-only; never crosses the API)
   currentId: null as EntryId | null,
   navRequest: null as EntryId | null,
+  /** Every feed title the server has ever told us. The sidebar hides feeds with
+   *  no unread items (`hideEmptyFeeds`), so without this a feed you have just
+   *  finished reading drops out of `panel.feeds` and the header title degrades
+   *  to its id. */
+  feedTitles: {} as Record<FeedId, string>,
   userHasScrolled: false,
   atListEnd: false,
   keepUnreadIds: [] as EntryId[],
@@ -54,7 +59,7 @@ export async function loadBootstrap(filter: EntriesFilter): Promise<void> {
     const result = await api.bootstrap(filter)
     applyDisplaySet(result.entries)
     appState.nextCursor = result.nextCursor
-    appState.panel = { feeds: result.feeds, categories: result.categories, counters: result.counters }
+    applyPanel({ feeds: result.feeds, categories: result.categories, counters: result.counters })
     appState.userPrefs = result.userPrefs
     appState.feedPrefs = result.feedPrefs
     appState.filter = filter
@@ -71,7 +76,7 @@ export async function reloadEntries(filter: EntriesFilter): Promise<void> {
     const result = await api.entries(filter)
     applyDisplaySet(result.entries)
     appState.nextCursor = result.nextCursor
-    appState.panel = await api.panel()
+    applyPanel(await api.panel((filter.feedId as FeedId | undefined) ?? null))
     appState.filter = filter
   } finally {
     appState.loading = false
@@ -102,6 +107,13 @@ function resolveViewPrefs(): void {
   appState.filter.hideReadItems = prefs?.hideReadItems ?? DEFAULT_HIDE_READ_ITEMS
 }
 
+/** Apply a sidebar snapshot, remembering the titles it carries. Every panel
+ *  assignment goes through here so the title cache cannot go stale-by-omission. */
+function applyPanel(next: FeedPanelResult): void {
+  appState.panel = next
+  for (const feed of next.feeds) appState.feedTitles[feed.id] = feed.title
+}
+
 /** Identity filter change (URL navigation). */
 export function setFilter(next: EntriesFilter): void {
   appState.filter = next
@@ -110,11 +122,43 @@ export function setFilter(next: EntriesFilter): void {
 
 /** Scroll-sentinel page fetch: appends the next window (old infinite scroll). */
 export async function loadMore(): Promise<void> {
-  const cursor = appState.nextCursor
-  if (!cursor || appState.loadingMore) return
+  if (appState.loadingMore) return
   appState.loadingMore = true
   try {
-    const result = await api.entries(appState.filter, cursor)
+    // A page that is entirely duplicates must not stall pagination (old spec:
+    // the bulk-second window). Keep paging while a page yields nothing fresh,
+    // bounded so a misbehaving server cannot loop us forever.
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const cursor = appState.nextCursor
+      if (!cursor) return
+      const result = await api.entries(appState.filter, cursor)
+      const seen = new Set(appState.entries.map((e) => e.id))
+      const fresh = result.entries.filter((e) => !seen.has(e.id))
+      if (fresh.length > 0) appState.entries.push(...fresh)
+      appState.nextCursor = result.nextCursor
+      if (fresh.length > 0 || !result.nextCursor) return
+    }
+  } finally {
+    appState.loadingMore = false
+  }
+}
+
+/**
+ * End-of-list recheck (old checkTail): the window is exhausted, so ask the
+ * server for anything beyond our loaded tail — items that arrived since the
+ * view opened — and APPEND them in place (scroll preserved). If the server
+ * says more remains, normal pagination resumes via the returned cursor.
+ * Skipped for search views (their two-phase cursor can't be rebuilt from one
+ * entry) and for newest sort (fresh items surface at the top; injecting at the
+ * tail would trip the sweep and auto-read them unseen).
+ */
+export async function checkTail(): Promise<void> {
+  if (appState.nextCursor || appState.loadingMore || appState.entries.length === 0) return
+  if (appState.filter.search || appState.filter.sort === 'newest') return
+  const tail = appState.entries[appState.entries.length - 1]!
+  appState.loadingMore = true
+  try {
+    const result = await api.entries(appState.filter, { publishedAt: tail.publishedAt, id: tail.id })
     const seen = new Set(appState.entries.map((e) => e.id))
     const fresh = result.entries.filter((e) => !seen.has(e.id))
     if (fresh.length > 0) appState.entries.push(...fresh)
@@ -125,17 +169,13 @@ export async function loadMore(): Promise<void> {
 }
 
 /**
- * Tail recheck at the end of the list (idle refresh hook): the window is
- * exhausted, so a reload picks up items that arrived since. Fresh list resets
- * the session like a page load.
+ * Refresh command (FeedMenu): ask the server to poll this view's feeds now —
+ * the old app queued a Miniflux refresh and never waited either — then re-read
+ * the view. New items land on the scheduler's next tick (≤60s) and surface
+ * through the idle tail recheck.
  */
-export async function loadEnd(): Promise<void> {
-  if (appState.nextCursor || appState.loadingMore || !appState.userHasScrolled || !appState.atListEnd) return
-  await reloadEntries(appState.filter)
-}
-
-/** Idle refresh: counters every poll, full panel every Nth (see polling below). */
-export async function refresh(): Promise<void> {
+export async function refreshFeeds(): Promise<void> {
+  await api.refresh(appState.filter)
   await reloadEntries(appState.filter)
 }
 
@@ -144,7 +184,15 @@ export async function refresh(): Promise<void> {
 export function currentTitle(): string {
   const filter = appState.filter
   if (filter.feedId != null && filter.feedId !== '') {
-    return appState.panel.feeds.find((f) => f.id === filter.feedId)?.title ?? `Feed ${filter.feedId}`
+    // The sidebar hides feeds with no unread items, so the lookup can miss the
+    // very feed being read; fall back to what we were told earlier, then to the
+    // loaded entries' own feed title, and only then to the id.
+    return (
+      appState.panel.feeds.find((f) => f.id === filter.feedId)?.title ??
+      appState.feedTitles[filter.feedId as FeedId] ??
+      appState.entries.find((e) => e.feedId === filter.feedId)?.feedTitle ??
+      `Feed ${filter.feedId}`
+    )
   }
   if (filter.starred) return 'Starred'
   return 'Latest'
@@ -251,12 +299,12 @@ export function moveAndRead(delta: 1 | -1): void {
   const ids = appState.entries.map((e) => e.id)
   if (ids.length === 0) return
   const currentIndex = appState.currentId ? ids.indexOf(appState.currentId) : -1
-  const nextIndex =
-    currentIndex === -1 ? (delta > 0 ? 0 : ids.length - 1) : clampNavIndex(currentIndex + delta, ids.length)
+  // Unselected (-1) clamps to the first entry for BOTH directions (old move()).
+  const nextIndex = Math.max(0, Math.min(ids.length - 1, currentIndex + delta))
   const nextId = ids[nextIndex]!
   appState.currentId = nextId
   appState.navRequest = nextId
-  autoRead(nextId, false, { explicit: true })
+  autoRead(nextId)
 }
 
 /** Shift+A / toolbar ✓: mark exactly the fetched display set read. */
@@ -266,12 +314,13 @@ export function markDisplayed(): void {
   void flushPending()
 }
 
-export function toggleStar(entryId: EntryId): void {
+export async function toggleStar(entryId: EntryId): Promise<void> {
   const entry = appState.entries.find((e) => e.id === entryId)
   if (!entry) return
   const next = !entry.starred
+  // Pessimistic (old behavior): the entry flips only once the server confirms.
+  await api.setStarred([entryId], next)
   entry.starred = next
-  void api.setStarred([entryId], next)
 }
 
 // ---- View prefs (per feed persisted; aggregates are session-only, matching
@@ -311,7 +360,7 @@ export function setHideReadItems(hideReadItems: boolean): void {
 }
 
 export function toggleHideEmptyFeeds(): void {
-  const next = !(appState.userPrefs.hideEmptyFeeds === true)
+  const next = !(appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
   appState.userPrefs = { ...appState.userPrefs, hideEmptyFeeds: next }
   void api.setUserPrefs({ hideEmptyFeeds: next })
 }
@@ -351,31 +400,32 @@ export async function saveRename(): Promise<void> {
   } else {
     await api.renameCategory(id, title)
   }
-  appState.panel = await api.panel()
+  applyPanel(await api.panel((appState.filter.feedId as FeedId | undefined) ?? null))
   cancelRename()
 }
 
 export async function unsubscribe(feedId: FeedId): Promise<void> {
   await api.unsubscribe(feedId)
-  appState.panel = await api.panel()
+  applyPanel(await api.panel((appState.filter.feedId as FeedId | undefined) ?? null))
 }
 
-// ---- Idle refresh (old polling composable): counters every 60s, full panel
-// every 10th tick, tail recheck when scrolled to the end. ----
+// ---- Idle refresh (old polling composable): keep the sidebar honest while
+// the page sits open, and extend the current view when items arrive at its
+// tail. Tail semantics are the old ones — checked every poll AND on reaching
+// the end, appended in place. One deliberate delta: the panel refreshes every
+// poll rather than every 10th, because the old lean-counters tier existed to
+// save Miniflux API round-trips and panel() is one local query here. ----
 
 const POLL_MS = 60_000
-const PANEL_EVERY = 10
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let pollTick = 0
 
 export function startIdleRefresh(): () => void {
   if (pollTimer) return () => stopIdleRefresh()
   pollTimer = setInterval(() => {
     void (async () => {
       try {
-        appState.panel = await api.panel()
-        pollTick++
-        if (pollTick % PANEL_EVERY === 0) await loadEnd()
+        applyPanel(await api.panel((appState.filter.feedId as FeedId | undefined) ?? null))
+        if (appState.atListEnd) await checkTail()
       } catch (err) {
         console.error('idle refresh failed', err)
       }

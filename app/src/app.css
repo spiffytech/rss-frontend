@@ -28,14 +28,12 @@
    * rather than the page body scrolling past it. Mirrors the old datastar
    * `body class="h-dvh flex flex-col"` + a `flex-1 min-h-0` content chain. */
   html,
-  body,
-  #app {
+  body {
     height: 100%;
   }
   body {
     margin: 0;
-  }
-  #app {
+    height: 100dvh;
     display: flex;
     flex-direction: column;
     overflow: hidden;

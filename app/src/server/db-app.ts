@@ -4,9 +4,13 @@ import { openDatabase, type ReaderHandle } from './db'
 
 let handle: ReaderHandle | null = null
 
+export function appDbPath(): string {
+  return process.env.READER_DB_PATH ?? fileURLToPath(new URL('../../../data/reader.sqlite', import.meta.url))
+}
+
 export function appDb(): ReaderHandle {
   if (!handle) {
-    handle = openDatabase(process.env.READER_DB_PATH ?? fileURLToPath(new URL('../../../data/reader.sqlite', import.meta.url)))
+    handle = openDatabase(appDbPath())
   }
   return handle
 }

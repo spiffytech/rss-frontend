@@ -12,7 +12,6 @@ import { DEFAULT_HIDE_READ_ITEMS } from '../../shared/prefs'
 import type { CategoryId, EntryId, FeedId, UserId } from '../../shared/ids'
 import type { ReaderHandle } from '../db'
 import { categories, entries, feedIcons, feeds } from '../db/schema'
-import { notHiddenPredicate } from './filters'
 import { translateSearch } from './search'
 
 type Db = ReaderHandle['db']
@@ -20,15 +19,17 @@ type Db = ReaderHandle['db']
 /** First window of a view; scrolling to the end fetches the next. */
 export const VIEW_PAGE_SIZE = 100
 
+/** Read rows sort after unread ones — the search view's primary key. */
+const bucketOf = () => sql`CASE WHEN ${entries.status} = 'read' THEN 1 ELSE 0 END`
+
 import type { ViewCursor } from '../../shared/types'
 export type { ViewCursor }
 
-function visibilityConditions(userId: UserId, filter: EntriesFilter): { where: SQL[]; order: SQL } {
+function visibilityConditions(userId: UserId, filter: EntriesFilter): { where: SQL[]; order: SQL; bucketFirst: boolean } {
   const isSearch = (filter.search ?? '') !== ''
   const where: SQL[] = [
     eq(entries.userId, userId),
     sql`${entries.status} <> 'removed'`,
-    sql`(${notHiddenPredicate()})`,
   ]
 
   // Search spans both buckets by default (the old app's search did); plain
@@ -58,24 +59,31 @@ function visibilityConditions(userId: UserId, filter: EntriesFilter): { where: S
 
   // Search is always newest-first (plan); other views honor the sort pref.
   const newestFirst = isSearch || filter.sort === 'newest'
-  const order = newestFirst ? desc(entries.publishedAt) : asc(entries.publishedAt)
-  return { where, order: sql`${order}, ${newestFirst ? desc(entries.id) : asc(entries.id)}` }
+  const time = newestFirst ? desc(entries.publishedAt) : asc(entries.publishedAt)
+  const tie = newestFirst ? desc(entries.id) : asc(entries.id)
+  // Search keeps the old app's unread-first buckets (its Miniflux cursor
+  // paginated per bucket, and unread matches are what a search is usually
+  // for). Within a bucket: newest first, exactly as before.
+  const order = isSearch ? sql`${bucketOf()} ASC, ${time}, ${tie}` : sql`${time}, ${tie}`
+  return { where, order, bucketFirst: isSearch }
 }
 
 export function queryView(
   db: Db,
   opts: { userId: UserId; filter: EntriesFilter; cursor?: ViewCursor | null; limit?: number },
 ): { entries: EntrySummary[]; nextCursor: ViewCursor | null } {
-  const { where, order } = visibilityConditions(opts.userId, opts.filter)
+  const { where, order, bucketFirst } = visibilityConditions(opts.userId, opts.filter)
   const newestFirst = (opts.filter.search ?? '') !== '' ? true : opts.filter.sort === 'newest'
   const cursor = opts.cursor
   if (cursor) {
     // Keyset continuation on (published_at, id) — the same pair the ORDER BY
     // uses, so equal timestamps can't skip or repeat rows at the seam.
     where.push(
-      newestFirst
-        ? sql`(${entries.publishedAt} < ${cursor.publishedAt} OR (${entries.publishedAt} = ${cursor.publishedAt} AND ${entries.id} < ${cursor.id}))`
-        : sql`(${entries.publishedAt} > ${cursor.publishedAt} OR (${entries.publishedAt} = ${cursor.publishedAt} AND ${entries.id} > ${cursor.id}))`,
+      bucketFirst
+        ? sql`(${bucketOf()} > ${cursor.bucket ?? 0} OR (${bucketOf()} = ${cursor.bucket ?? 0} AND (${entries.publishedAt} < ${cursor.publishedAt} OR (${entries.publishedAt} = ${cursor.publishedAt} AND ${entries.id} < ${cursor.id}))))`
+        : newestFirst
+          ? sql`(${entries.publishedAt} < ${cursor.publishedAt} OR (${entries.publishedAt} = ${cursor.publishedAt} AND ${entries.id} < ${cursor.id}))`
+          : sql`(${entries.publishedAt} > ${cursor.publishedAt} OR (${entries.publishedAt} = ${cursor.publishedAt} AND ${entries.id} > ${cursor.id}))`,
     )
   }
   const limit = opts.limit ?? VIEW_PAGE_SIZE
@@ -101,9 +109,14 @@ export function queryView(
     .all()
 
   const page = rows.slice(0, limit)
+  const last = page[page.length - 1]
   const nextCursor: ViewCursor | null =
-    rows.length > limit && page.length > 0
-      ? { publishedAt: page[page.length - 1]!.publishedAt, id: page[page.length - 1]!.id }
+    rows.length > limit && last
+      ? {
+          publishedAt: last.publishedAt,
+          id: last.id,
+          ...(bucketFirst ? { bucket: (last.status === 'read' ? 1 : 0) as 0 | 1 } : {}),
+        }
       : null
   return { entries: page, nextCursor }
 }
@@ -126,7 +139,10 @@ export function getEntryContent(db: Db, opts: { userId: UserId; entryId: EntryId
 }
 
 /** Sidebar snapshot: feeds, categories with totals, and per-feed unread counts. */
-export function panel(db: Db, opts: { userId: UserId; hideEmptyFeeds: boolean }): FeedPanelResult {
+export function panel(
+  db: Db,
+  opts: { userId: UserId; hideEmptyFeeds: boolean; currentFeed?: FeedId | null },
+): FeedPanelResult {
   const feedRows = db
     .select({
       id: feeds.id,
@@ -148,7 +164,7 @@ export function panel(db: Db, opts: { userId: UserId; hideEmptyFeeds: boolean })
     .select({ feedId: entries.feedId, count: sql<number>`count(*)` })
     .from(entries)
     .innerJoin(feeds, eq(entries.feedId, feeds.id))
-    .where(and(eq(entries.userId, opts.userId), eq(entries.status, 'unread'), sql`${entries.status} <> 'removed'`, sql`(${notHiddenPredicate()})`))
+    .where(and(eq(entries.userId, opts.userId), eq(entries.status, 'unread'), sql`${entries.status} <> 'removed'`))
     .groupBy(entries.feedId)
     .all()
 
@@ -171,18 +187,33 @@ export function panel(db: Db, opts: { userId: UserId; hideEmptyFeeds: boolean })
     feedCount: feedsByCategory.get(c.id)?.count ?? 0,
   }))
 
-  const visibleFeeds: FeedInfo[] = feedRows
-    .filter((f) => !opts.hideEmptyFeeds || (counters[f.id] ?? 0) > 0 || f.parsingErrorCount > 0)
-    .map((f) => ({
-      id: f.id,
-      categoryId: f.categoryId,
-      title: f.title,
-      siteUrl: f.siteUrl,
-      feedUrl: f.feedUrl,
-      disabled: f.disabled,
-      parsingErrorCount: f.parsingErrorCount,
-      iconUrl: f.iconId === null ? null : `/api/icons/${f.id}`,
-    }))
+  const toFeedInfo = (f: (typeof feedRows)[number]): FeedInfo => ({
+    id: f.id,
+    categoryId: f.categoryId,
+    title: f.title,
+    siteUrl: f.siteUrl,
+    feedUrl: f.feedUrl,
+    disabled: f.disabled,
+    parsingErrorCount: f.parsingErrorCount,
+    iconUrl: f.iconId === null ? null : `/api/icons/${f.id}`,
+  })
 
-  return { feeds: visibleFeeds, categories: categoryCounts, counters: counters as Record<FeedId, number> }
+  // The view's own feed stays in the list even with nothing unread: the sidebar
+  // keeps the feed you are reading selected, and the header names it. The client
+  // mirrors this with `!isActiveFeed(feed.id)` in its hiding rules.
+  const visibleFeeds: FeedInfo[] = feedRows
+    .filter(
+      (f) =>
+        !opts.hideEmptyFeeds ||
+        (counters[f.id] ?? 0) > 0 ||
+        f.parsingErrorCount > 0 ||
+        f.id === opts.currentFeed,
+    )
+    .map(toFeedInfo)
+
+  return {
+    feeds: visibleFeeds,
+    categories: categoryCounts,
+    counters: counters as Record<FeedId, number>,
+  }
 }

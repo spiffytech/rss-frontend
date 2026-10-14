@@ -14,6 +14,7 @@
 import DOMPurify from 'dompurify'
 
 import { POLICY, safeUrlProtocol, toDomPurifyConfig, toSanitizerConfig } from './policy'
+import { usesAddImageTitle } from './rewrites'
 import { parseYouTubeUrl } from './youtube'
 
 const URL_ATTRS: Array<[string, string]> = [
@@ -67,12 +68,41 @@ function resolveUrl(raw: string, feedBaseUrl: string): string {
   }
 }
 
-function walk(node: Element, feedBaseUrl: string): Element | null {
+/** Miniflux's add_image_title replacement markup: the image (src + alt only,
+ *  the title is dropped) inside a figure, its title as the caption text. */
+function wrapImageTitle(img: Element, src: string, title: string): Element {
+  const doc = img.ownerDocument
+  const figure = doc.createElement('figure')
+  const image = doc.createElement('img')
+  image.setAttribute('src', src)
+  image.setAttribute('alt', img.getAttribute('alt') ?? '')
+  const caption = doc.createElement('figcaption')
+  const paragraph = doc.createElement('p')
+  paragraph.textContent = title
+  caption.append(paragraph)
+  figure.append(image, caption)
+  return figure
+}
+
+function walk(node: Element, feedBaseUrl: string, addImageTitle: boolean): Element | null {
+  const tag = node.tagName.toLowerCase()
+
   // <base> in entry markup re-targets every relative URL — drop it outright.
-  if (node.tagName.toLowerCase() === 'base') return null
+  if (tag === 'base') return null
+
+  // Miniflux's add_image_title rule (comic feeds): the image's title IS the
+  // joke — xkcd's alt text — so it becomes visible in a figcaption and the
+  // tooltip is dropped. The new img carries no title, so this cannot re-fire.
+  if (addImageTitle && tag === 'img') {
+    const src = node.getAttribute('src')
+    const title = node.getAttribute('title')
+    if (src !== null && title !== null && title.trim() !== '') {
+      return walk(wrapImageTitle(node, src, title), feedBaseUrl, addImageTitle)
+    }
+  }
 
   // YouTube embeds → lite-youtube custom element (allowed by the policy).
-  if (node.tagName.toLowerCase() === 'iframe') {
+  if (tag === 'iframe') {
     const src = node.getAttribute('src') ?? ''
     const youtube = parseYouTubeUrl(src)
     if (!youtube) return null // only lite-youtube embeds survive (policy)
@@ -84,7 +114,6 @@ function walk(node: Element, feedBaseUrl: string): Element | null {
     return lite
   }
 
-  const tag = node.tagName.toLowerCase()
   const policy = POLICY[tag]
   if (policy) {
     // Drop attributes outside the policy for this element.
@@ -103,22 +132,42 @@ function walk(node: Element, feedBaseUrl: string): Element | null {
   }
 
   for (const child of [...node.children]) {
-    const replacement = walk(child, feedBaseUrl)
+    const replacement = walk(child, feedBaseUrl, addImageTitle)
     if (replacement === null) child.remove()
     else if (replacement !== child) child.replaceWith(replacement)
   }
   return node
 }
 
-/** Raw stored HTML → transformed display HTML (still untrusted until sunk). */
-export function transformEntryContent(rawHtml: string, feedBaseUrl: string): string {
+/** Raw stored HTML → transformed display HTML (still untrusted until sunk).
+ *  `entryUrl` (the entry's own URL, not the feed's) selects Miniflux's
+ *  per-domain rewrite rules. */
+export function transformEntryContent(rawHtml: string, feedBaseUrl: string, entryUrl?: string | null): string {
   const doc = Document.parseHTMLUnsafe(rawHtml)
   const body = doc.body
-  walk(body, feedBaseUrl)
+  walk(body, feedBaseUrl, usesAddImageTitle(entryUrl))
   return body.innerHTML
 }
 
 /** Sink transformed HTML into an element through a safe sanitizer. */
+/** loading="lazy" on imgs/iframes + an explicit aspect-ratio on sized iframes
+ *  (port of the old lazyHtml). Runs AFTER the sink so it needs no sanitizer
+ *  allowance for `loading`/`style` — DOM property writes only. An iframe has
+ *  no intrinsic ratio, so max-width:100% alone distorts it; deriving the ratio
+ *  from width/height makes the height scale with the width. */
+export function applyEmbedHints(root: Element): void {
+  for (const el of root.querySelectorAll('img, iframe')) {
+    if (!el.hasAttribute('loading')) el.setAttribute('loading', 'lazy')
+  }
+  for (const el of Array.from(root.querySelectorAll('iframe'))) {
+    const w = Number(el.getAttribute('width'))
+    const h = Number(el.getAttribute('height'))
+    if (Number.isFinite(w) && w > 0 && Number.isFinite(h) && h > 0) {
+      ;(el as HTMLElement).style.aspectRatio = `${w} / ${h}`
+    }
+  }
+}
+
 export function sinkEntryContent(target: Element, transformedHtml: string): void {
   // The Sanitizer API config shape is still settling across engines; the
   // policy adapter passes its table through and falls back to setHTML's safe
@@ -132,6 +181,7 @@ export function sinkEntryContent(target: Element, transformedHtml: string): void
       setHTML.call(target, transformedHtml, {
         sanitizer: new SanitizerCtor(config),
       })
+      applyEmbedHints(target)
       return
     } catch (error) {
       // Engine rejected the policy config: fall back to setHTML's safe DEFAULT
@@ -139,6 +189,7 @@ export function sinkEntryContent(target: Element, transformedHtml: string): void
       target.setAttribute('data-sink-fallback', '')
       target.setAttribute('data-sink-error', String(error))
       setHTML.call(target, transformedHtml)
+      applyEmbedHints(target)
       return
     }
   }
@@ -149,4 +200,5 @@ export function sinkEntryContent(target: Element, transformedHtml: string): void
     CUSTOM_ELEMENT_HANDLING: config.CUSTOM_ELEMENT_HANDLING,
     ALLOWED_URI_REGEXP: config.ALLOWED_URI_REGEXP,
   }) as unknown as string
+  applyEmbedHints(target)
 }

@@ -11,9 +11,6 @@ const feedPatch = z
     viewMode: z.enum(['expanded', 'list']).optional(),
     sort: z.enum(['oldest', 'newest']).optional(),
     hideReadItems: z.boolean().optional(),
-    hiddenKeywords: z.array(z.string()).optional(),
-    hiddenAuthors: z.array(z.string()).optional(),
-    hiddenTags: z.array(z.string()).optional(),
   })
   .strict()
 

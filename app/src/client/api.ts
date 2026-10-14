@@ -24,7 +24,10 @@ export const api = {
   entries: (filter: EntriesFilter, cursor?: ViewCursor | null) =>
     call<EntriesResult>('/api/entries', { method: 'POST', body: JSON.stringify({ filter, cursor }) }),
   content: (entryId: EntryId) => call<EntryContent>(`/api/entries/${entryId}/content`),
-  panel: () => call<FeedPanelResult>('/api/panel'),
+  panel: (feedId?: FeedId | null) =>
+    call<FeedPanelResult>(feedId ? `/api/panel?feed=${encodeURIComponent(feedId)}` : '/api/panel'),
+  refresh: (filter: EntriesFilter) =>
+    call<{ queued: number }>('/api/refresh', { method: 'POST', body: JSON.stringify({ filter }) }),
 
   setStatus: (entryIds: EntryId[], status: 'read' | 'unread') =>
     call<{ changed: number }>('/api/entries/status', { method: 'POST', body: JSON.stringify({ entryIds, status }) }),

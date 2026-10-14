@@ -35,9 +35,5 @@ export function parseFilterFromUrl(query: Record<string, string | null | undefin
   if (query['starred'] === '1') filter.starred = true
   const search = query['search']
   if (search) filter.search = search
-  if (query['searchStatus'] === 'unread') filter.searchStatus = 'unread'
-  if (query['hideReadItems'] === '0') filter.hideReadItems = false
-  if (query['hideReadItems'] === '1') filter.hideReadItems = true
-  if (query['sort'] === 'oldest' || query['sort'] === 'newest') filter.sort = query['sort']
   return filter
 }

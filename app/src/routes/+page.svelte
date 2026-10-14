@@ -11,7 +11,7 @@
   import {
     appState,
     loadBootstrap,
-    loadEnd,
+    checkTail,
     reloadEntries,
     setFilter,
     setViewMode,
@@ -23,6 +23,14 @@
 
   const isDesktop = $state({ value: false })
   let sidebarOpen = $state(false)
+
+  // Mobile drawer: picking any sidebar entry closes it (rows navigate by
+  // replacing the identity filter — this covers every selection path).
+  $effect(() => {
+    const f = appState.filter
+    void (f.feedId, f.categoryId, f.starred, f.search)
+    sidebarOpen = false
+  })
 
   let scrollEl: HTMLDivElement | undefined = $state()
 
@@ -85,7 +93,7 @@
   })
 
   // Mark userHasScrolled + end-of-list state on the entry-list scroll container.
-  // atListEnd gates the idle-time tail recheck (loadEnd).
+  // atListEnd gates the idle-time tail recheck (checkTail).
   function onListScroll() {
     const el = scrollEl
     // A scroll landing at scrollTop 0 is our own programmatic reset when a

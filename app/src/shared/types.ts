@@ -63,7 +63,9 @@ export type EntriesResult = {
   nextCursor: ViewCursor | null
 }
 
-export type ViewCursor = { publishedAt: EpochMs; id: EntryId }
+/** Keyset cursor into (published_at, id). `bucket` is present only for
+ *  search views, whose ordering is unread-first (0 = unread, 1 = read). */
+export type ViewCursor = { publishedAt: EpochMs; id: EntryId; bucket?: 0 | 1 }
 
 export type EntryResult = {
   entry: EntrySummary

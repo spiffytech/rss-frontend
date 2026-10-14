@@ -5,7 +5,11 @@
   // window instead of the old Miniflux cursor.
   import EntryItem from './EntryItem.svelte'
   import { loadMoreSentinel } from '../actions.js'
-  import { appState, loadMore } from '../state.svelte.js'
+  import { appState, checkTail, loadMore } from '../state.svelte.js'
+
+  // The sentinel pages the keyset window; once the window is exhausted it
+  // rechecks the tail for arrivals (old EntryList/checkTail semantics).
+  const onSentinel = (): Promise<void> => (appState.nextCursor ? loadMore() : checkTail())
 </script>
 
 <div data-testid="entry-list" class="flex flex-col gap-y-1 pb-[100dvh]">
@@ -15,5 +19,5 @@
   {#each appState.entries as entry (entry.id)}
     <EntryItem {entry} />
   {/each}
-  <div id="entry-sentinel" class="h-1 w-full" class:hidden={appState.loadingMore} use:loadMoreSentinel={loadMore}></div>
+  <div id="entry-sentinel" class="h-1 w-full" class:hidden={appState.loadingMore} use:loadMoreSentinel={onSentinel}></div>
 </div>

@@ -12,7 +12,7 @@
  */
 export function computeUnreadCount(
   filter: { feedId?: string; categoryId?: string; starred?: boolean },
-  feeds: Array<{ id: string }>,
+  feeds: Array<{ id: string; categoryId?: string }>,
   unreads: Record<string, number>,
 ): number | null {
   if (filter.feedId != null && filter.feedId !== '') {
@@ -23,7 +23,7 @@ export function computeUnreadCount(
   }
   if (filter.categoryId != null && filter.categoryId !== '') {
     return feeds
-      .filter((f) => (f as unknown as { categoryId: string }).categoryId === filter.categoryId)
+      .filter((f) => f.categoryId === filter.categoryId)
       .reduce((sum, f) => sum + (unreads[f.id] ?? 0), 0)
   }
   // Latest: sum of all per-feed unread counts.

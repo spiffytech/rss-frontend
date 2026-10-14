@@ -7,7 +7,8 @@
  * - `sweepLine` (v-intersect-line): a pure state sweep on scroll — entries
  *   whose top edge crosses the band line (15% from the root's top) fire
  *   autoRead once (isScrolledPast), gated on userHasScrolled.
- * The infinite-scroll sentinel (v-intersect) dies with pagination.
+ * - `loadMoreSentinel` (v-intersect): pages the keyset window; when the
+ *   window is exhausted the store rechecks the tail instead (checkTail).
  */
 import type { Action } from 'svelte/action'
 

@@ -69,14 +69,28 @@
       </label>
     </div>
 
-    {#if error}<p class="text-sm text-red-600 text-center">{error}</p>{/if}
+    {#if error}<p id="err" role="alert" class="text-sm text-red-600">{error}</p>{/if}
 
     <button
       type="submit"
       disabled={submitting}
       class="self-center min-w-40 w-full sm:w-auto bg-cyan-700 text-white rounded-full px-10 py-2.5 font-medium shadow-sm hover:bg-cyan-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-700 focus-visible:ring-offset-2 active:bg-cyan-900 active:translate-y-px disabled:opacity-60 disabled:translate-y-0"
     >
-      {submitting ? 'Signing in…' : 'Sign in'}
+      Sign in
     </button>
   </form>
 </main>
+
+<style>
+  @media (prefers-reduced-motion: no-preference) {
+    .login-card {
+      animation: login-rise 420ms cubic-bezier(0.16, 1, 0.3, 1);
+    }
+  }
+  @keyframes login-rise {
+    from {
+      opacity: 0;
+      transform: translateY(12px);
+    }
+  }
+</style>

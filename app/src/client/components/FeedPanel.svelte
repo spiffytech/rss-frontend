@@ -17,6 +17,7 @@
   } from '../state.svelte.js'
   import { autofocus } from '../actions.js'
   import { computeUnreadCount } from '../../shared/util.js'
+  import { DEFAULT_HIDE_EMPTY_FEEDS } from '../../shared/prefs.js'
   import type { FeedInfo } from '../../shared/types'
 
 
@@ -94,7 +95,7 @@
   }
 
   function showCategory(catId: string, catFeeds: FeedInfo[]): boolean {
-    if (appState.userPrefs.hideEmptyFeeds === true) {
+    if ((appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)) {
       const hasUnread = catFeeds.some((f) => (appState.panel.counters[f.id] ?? 0) > 0)
       const hasActive = catFeeds.some((f) => appState.filter.feedId === f.id)
       if (!hasUnread && !hasActive) return false
@@ -139,7 +140,7 @@
       {#each feedsByCategory.get('uncategorized') ?? [] as feed (feed.id)}
         <li
           class="group flex items-center gap-x-2 text-sm"
-          class:hidden={(appState.userPrefs.hideEmptyFeeds === true &&
+          class:hidden={((appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) &&
             (appState.panel.counters[feed.id] ?? 0) === 0 &&
             !isActiveFeed(feed.id))}
         >
@@ -257,7 +258,7 @@
               {#each feedsByCategory.get(cat.id) ?? [] as feed (feed.id)}
                 <li
                   class="group flex items-center gap-x-2 text-sm"
-                  class:hidden={appState.userPrefs.hideEmptyFeeds === true &&
+                  class:hidden={(appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) &&
                     (appState.panel.counters[feed.id] ?? 0) === 0 &&
                     !isActiveFeed(feed.id)}
                 >
