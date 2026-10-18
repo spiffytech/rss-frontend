@@ -11,7 +11,7 @@
  */
 import { describe, expect, test } from 'bun:test'
 
-import { computeUnreadCount, timeAgo } from '../src/shared/util'
+import { computeUnreadCount, compareTitlesCI, timeAgo } from '../src/shared/util'
 
 describe('computeUnreadCount', () => {
   const feeds = [
@@ -66,5 +66,22 @@ describe('timeAgo', () => {
 
   test('invalid input renders empty', () => {
     expect(timeAgo(Number.NaN)).toBe('')
+  })
+})
+
+describe('compareTitlesCI (sidebar order)', () => {
+  test('ignores case, so capitals do not jump the queue', () => {
+    const titles = ['Zebra feed', 'apple feed', 'Blog', 'cherry feed']
+    expect([...titles].sort(compareTitlesCI)).toEqual(['apple feed', 'Blog', 'cherry feed', 'Zebra feed'])
+  })
+
+  test('sorts alphabetically, not by code point', () => {
+    // Binary collation would give ['Cherry', 'Zebra', 'apple'] here.
+    expect(['apple', 'Zebra', 'Cherry'].sort(compareTitlesCI)).toEqual(['apple', 'Cherry', 'Zebra'])
+  })
+
+  test('accents compare equal to their base letter (sensitivity: base)', () => {
+    expect(compareTitlesCI('emile', 'Émile')).toBe(0)
+    expect(compareTitlesCI('Zebra', 'éclair')).toBeGreaterThan(0)
   })
 })

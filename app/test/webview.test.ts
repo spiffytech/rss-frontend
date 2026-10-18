@@ -599,3 +599,49 @@ it(
   },
   45_000,
 )
+
+// Runs last: it adds feeds (with one unread item each, so the sidebar shows
+// them) to assert the rendered order.
+it(
+  'the sidebar sorts feeds case-insensitively',
+  async () => {
+    const handle = openDatabase(fixtureDbPath)
+    const now = epochMs(Date.now())
+    for (const title of ['apple feed', 'cherry feed', 'Zebra feed']) {
+      const feedId = newFeedId(now)
+      const slug = title.replace(/\s+/g, '-')
+      handle.sqlite.run(
+        'INSERT INTO feeds (id, user_id, category_id, title, feed_url, site_url, created_at) VALUES (?, (SELECT id FROM users LIMIT 1), (SELECT id FROM categories LIMIT 1), ?, ?, ?, ?)',
+        [feedId, title, `https://example.com/${slug}`, `https://example.com/${slug}/`, now],
+      )
+      handle.sqlite.run(
+        `INSERT INTO entries (id, user_id, feed_id, hash, title, content, published_at, created_at, changed_at)
+         VALUES (?, (SELECT id FROM users LIMIT 1), ?, ?, ?, '<p>body</p>', ?, ?, ?)`,
+        [newEntryId(now), feedId, `case-${slug}`, `${title} item`, now, now, now],
+      )
+    }
+    handle.sqlite.close()
+
+    const view = new Bun.WebView({ width: 1100, height: 800 })
+    try {
+      await view.navigate(`${BASE}/login`)
+      await view.evaluate(`
+        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
+      `)
+      await view.navigate(`${BASE}/`)
+      const order = (await view.evaluate(
+        until(`
+          const els = [...document.querySelectorAll('a[href^="/?feed="] span')]
+          return els.length >= 4 ? JSON.stringify(els.map((el) => el.textContent)) : ''
+        `),
+      )) as string
+      console.log('sidebar feed order:', order)
+      // Binary collation would render ['Blog', 'Zebra feed', 'apple feed', 'cherry feed'].
+      expect(JSON.parse(order)).toEqual(['apple feed', 'Blog', 'cherry feed', 'Zebra feed'])
+    } finally {
+      await view.close()
+    }
+  },
+  45_000,
+)

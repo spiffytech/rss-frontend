@@ -6,6 +6,17 @@
  */
 
 /**
+ * Sidebar ordering for folders and feeds: alphabetical, case-insensitive.
+ * `sensitivity: 'base'` is what the old app used for folders, and it matches
+ * the ordering its Miniflux-backed feed list had (Postgres' en_US collation
+ * sorts case as a tertiary difference, so 'Zebra' never jumped above 'apple').
+ * SQLite's default collation is binary, which would put every capital first.
+ */
+export function compareTitlesCI(a: string, b: string): number {
+  return a.localeCompare(b, undefined, { sensitivity: 'base' })
+}
+
+/**
  * Unread count for the current filter, computed from per-feed counters (the
  * provider source of truth). Returns null when the count is not meaningful
  * (e.g. Starred has no per-feed unread breakdown here).

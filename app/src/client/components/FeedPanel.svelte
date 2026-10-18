@@ -16,7 +16,7 @@
     startRename,
   } from '../state.svelte.js'
   import { autofocus } from '../actions.js'
-  import { computeUnreadCount } from '../../shared/util.js'
+  import { computeUnreadCount, compareTitlesCI } from '../../shared/util.js'
   import { DEFAULT_HIDE_EMPTY_FEEDS } from '../../shared/prefs.js'
   import type { FeedInfo } from '../../shared/types'
 
@@ -27,7 +27,10 @@
 
   const feedsByCategory = $derived.by(() => {
     const map = new Map<string, FeedInfo[]>()
-    for (const feed of appState.panel.feeds) {
+    // Case-insensitive order inside each folder (the server hands them over in
+    // SQLite's binary collation order, which puts every capital letter first).
+    const sorted = [...appState.panel.feeds].sort((a, b) => compareTitlesCI(a.title, b.title))
+    for (const feed of sorted) {
       const list = map.get(feed.categoryId) ?? []
       list.push(feed)
       map.set(feed.categoryId, list)
@@ -37,9 +40,7 @@
 
   // Folders (categories) sorted alphabetically, case-insensitive.
   const sortedCategories = $derived(
-    [...appState.panel.categories].sort((a, b) =>
-      a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }),
-    ),
+    [...appState.panel.categories].sort((a, b) => compareTitlesCI(a.title, b.title)),
   )
 
   /** Build an identity-only nav URL (which feed/category/section). */
