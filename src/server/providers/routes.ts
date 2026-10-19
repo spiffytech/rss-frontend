@@ -14,8 +14,9 @@
  * verbatim is stored XSS on the app origin: a feed can hand back a "favicon" of
  * `text/html` and the browser will render it as a document on our origin.
  *
- * Raster formats only. `image/svg+xml` is deliberately excluded — SVG can carry
- * script and executes when the resource is navigated to directly.
+ * `image/svg+xml` is allowed — it is what modern sites serve, Hacker News
+ * among them — but it is the one entry that can carry script, so the icon
+ * route ships it with a `sandbox` CSP (see the response handler below).
  */
 const ALLOWED_ICON_MIME = new Set([
   'image/png',
@@ -26,6 +27,7 @@ const ALLOWED_ICON_MIME = new Set([
   'image/bmp',
   'image/x-icon',
   'image/vnd.microsoft.icon',
+  'image/svg+xml',
 ])
 
 import { Hono } from 'hono'
@@ -304,26 +306,40 @@ export function createProviderRoutes(
       try {
         icon = await provider.getFeedIcon(id)
       } catch {
-        c.header('Cache-Control', 'private, max-age=3600, stale-while-revalidate=3600')
+        c.header('Cache-Control', 'private, max-age=300, stale-while-revalidate=3600')
         return c.text('icon unavailable', 404)
       }
       const [declaredMime, base64] = icon.data.split(';base64,', 2)
       if (!base64 || !declaredMime) {
-        c.header('Cache-Control', 'private, max-age=3600, stale-while-revalidate=3600')
+        c.header('Cache-Control', 'private, max-age=300, stale-while-revalidate=3600')
         return c.text('icon unavailable', 404)
       }
       // Normalise away any parameters (`image/png; charset=...`) and reject
-      // anything outside the raster allowlist. `X-Content-Type-Options: nosniff`
-      // is the second line of defence: it stops the browser from second-guessing
+      // anything outside the allowlist. `X-Content-Type-Options: nosniff` is
+      // the second line of defence: it stops the browser from second-guessing
       // the type even if a bad value slipped through.
       const mime = (declaredMime.split(';')[0] ?? '').trim().toLowerCase()
       if (!ALLOWED_ICON_MIME.has(mime)) {
-        c.header('Cache-Control', 'private, max-age=3600, stale-while-revalidate=3600')
+        c.header('Cache-Control', 'private, max-age=300, stale-while-revalidate=3600')
         return c.text('icon unavailable', 404)
       }
       const bytes = Buffer.from(base64, 'base64')
       c.header('Cache-Control', 'private, max-age=7200, stale-while-revalidate=604800')
-      return c.body(bytes, 200, { 'Content-Type': mime, 'X-Content-Type-Options': 'nosniff' })
+      const headers: Record<string, string> = {
+        'Content-Type': mime,
+        'X-Content-Type-Options': 'nosniff',
+      }
+      if (mime === 'image/svg+xml') {
+        // The one allowlisted type that can carry script. Safe as an <img>
+        // subresource, but not when navigated to directly on our origin:
+        // `sandbox` (no allow-scripts) drops it to an opaque origin with
+        // scripting off, and `default-src 'none'` stops it fetching anything
+        // external. `<img>` rendering is unaffected — a sandbox only applies
+        // to a document that has a browsing context.
+        headers['Content-Security-Policy'] =
+          "default-src 'none'; style-src 'unsafe-inline'; sandbox"
+      }
+      return c.body(bytes, 200, headers)
     })
 
     // ---- Preferences (204; client applies locally, no re-fetch) ----
