@@ -200,15 +200,10 @@ export function panel(
 
   // The view's own feed stays in the list even with nothing unread: the sidebar
   // keeps the feed you are reading selected, and the header names it. The client
-  // mirrors this with `!isActiveFeed(feed.id)` in its hiding rules.
+  // mirrors this with `!isActiveFeed(feed.id)` in its hiding rules. Fetch-error
+  // state deliberately plays no part in visibility either way.
   const visibleFeeds: FeedInfo[] = feedRows
-    .filter(
-      (f) =>
-        !opts.hideEmptyFeeds ||
-        (counters[f.id] ?? 0) > 0 ||
-        f.parsingErrorCount > 0 ||
-        f.id === opts.currentFeed,
-    )
+    .filter((f) => !opts.hideEmptyFeeds || (counters[f.id] ?? 0) > 0 || f.id === opts.currentFeed)
     .map(toFeedInfo)
 
   return {
