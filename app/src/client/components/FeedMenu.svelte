@@ -23,6 +23,7 @@
     effectiveViewMode,
     markDisplayed,
     refreshFeeds,
+    refreshPanel,
     setHideReadItems,
     setSort,
     setViewMode,
@@ -173,7 +174,9 @@
     const title = renameTitle.trim()
     if (id == null || id === '' || !title) return
     await api.renameFeed(id as never, title)
-    appState.panel = await api.panel() // lists update in place — no reload/scroll reset
+    // Through the shared snapshot helper: keeps the active feed in the sidebar
+    // and refreshes the title cache the header falls back to.
+    await refreshPanel()
     renameOpen = false
     closePanel()
   }
@@ -310,15 +313,19 @@
              the same two-up grid as the commands below. The count is odd (five in
              a feed view, three in an aggregate), so the last row has a spare
              cell; it is left empty rather than stretched, which keeps every
-             button the same width. -->
+             button the same width. Sort and read-items are omitted while a
+             search is active: search is always newest-first across both read
+             buckets, so those rows would contradict the list. -->
         <div class="p-2 grid grid-cols-2 gap-1 border-b border-line">
           <button type="button" class="menu-row" onclick={onViewMode}>
             View: {effectiveViewMode()}
           </button>
-          {#if isFeedView}
+          {#if isFeedView && !searchActive}
             <button type="button" class="menu-row" onclick={onSort}>
               Sort: {(appState.filter.sort ?? 'oldest') === 'oldest' ? 'oldest first' : 'newest first'}
             </button>
+          {/if}
+          {#if isFeedView}
             <button
               type="button"
               class="menu-row {autoReadOff ? '' : TOGGLE_ON}"
@@ -336,14 +343,16 @@
           >
             Empty feeds: {(appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? 'hidden' : 'shown'}
           </button>
-          <button
-            type="button"
-            class="menu-row {appState.filter.hideReadItems ?? true ? TOGGLE_ON : ''}"
-            aria-pressed={appState.filter.hideReadItems ?? true}
-            onclick={onHideReadItems}
-          >
-            Read items: {appState.filter.hideReadItems ?? true ? 'hidden' : 'shown'}
-          </button>
+          {#if !searchActive}
+            <button
+              type="button"
+              class="menu-row {appState.filter.hideReadItems ?? true ? TOGGLE_ON : ''}"
+              aria-pressed={appState.filter.hideReadItems ?? true}
+              onclick={onHideReadItems}
+            >
+              Read items: {appState.filter.hideReadItems ?? true ? 'hidden' : 'shown'}
+            </button>
+          {/if}
         </div>
 
         <!-- Commands, in a two-up grid: always an even count (four in a feed view,

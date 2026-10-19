@@ -5,6 +5,7 @@
  *
  * Scopes: `user` (UserPrefs) and `feed:<uuid>` (FeedPrefs).
  */
+import type { EntriesFilter } from './filter'
 import type { FeedId } from './ids'
 
 export type UserPrefs = {
@@ -29,6 +30,23 @@ export const DEFAULT_HIDE_READ_ITEMS = true
 
 /** Reading time is surfaced only at or above this many minutes. */
 export const READING_TIME_DISPLAY_MIN = 2
+
+/**
+ * Fold a feed's saved view prefs into a filter, falling back to the hardcoded
+ * defaults. The bootstrap endpoint and the client both resolve through this so
+ * the rows they show and the controls they render can't disagree.
+ */
+export function resolveViewFilter(
+  filter: EntriesFilter,
+  feedPrefs: Partial<Record<FeedId, FeedPrefs>> | undefined,
+): EntriesFilter {
+  const prefs = filter.feedId ? feedPrefs?.[filter.feedId as FeedId] : undefined
+  return {
+    ...filter,
+    sort: prefs?.sort ?? DEFAULT_SORT,
+    hideReadItems: prefs?.hideReadItems ?? DEFAULT_HIDE_READ_ITEMS,
+  }
+}
 
 export function userScope(): string {
   return 'user'

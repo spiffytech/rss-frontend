@@ -7,6 +7,7 @@ import { rebuildEntrySearch } from '../src/server/db/search-sync'
 import { markEntries, setStarred, setUserPrefs } from '../src/server/query/mutations'
 import { getEntryContent, panel, queryView } from '../src/server/query/views'
 import { epochMs, newCategoryId, newEntryId, newFeedId, newUserId, type EntryId, type FeedId, type UserId } from '../src/shared/ids'
+import { resolveViewFilter } from '../src/shared/prefs'
 
 const NOW = 1_750_000_000_000
 
@@ -61,6 +62,17 @@ test('hideReadItems=false brings read rows back', () => {
   const { handle, userId } = setup()
   const rows = view(handle.db, { userId, filter: { hideReadItems: false } })
   expect(rows.map((r) => r.title).sort()).toEqual(['alpha launch', 'beta reveal', 'gamma update'])
+})
+
+test('resolveViewFilter folds in the feed prefs so the first window honors them', () => {
+  const { handle, userId, feedA } = setup()
+  const prefs = { [feedA]: { sort: 'newest' as const, hideReadItems: false } }
+  // The bare identity filter from the URL: defaults would be oldest + unread-only.
+  expect(view(handle.db, { userId, filter: resolveViewFilter({ feedId: feedA }, {}) }).map((r) => r.title))
+    .toEqual(['alpha launch'])
+  // With the feed's saved prefs the same request comes back newest-first with read rows.
+  expect(view(handle.db, { userId, filter: resolveViewFilter({ feedId: feedA }, prefs) }).map((r) => r.title))
+    .toEqual(['beta reveal', 'alpha launch'])
 })
 
 test('feed, category and starred scopes', () => {

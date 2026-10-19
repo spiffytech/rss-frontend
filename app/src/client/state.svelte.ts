@@ -12,6 +12,7 @@ import { DEFAULT_HIDE_EMPTY_FEEDS,
   DEFAULT_HIDE_READ_ITEMS,
   DEFAULT_SORT,
   DEFAULT_VIEW_MODE,
+  resolveViewFilter,
   type FeedPrefs,
   type UserPrefs,
 } from '../shared/prefs'
@@ -57,12 +58,15 @@ export async function loadBootstrap(filter: EntriesFilter): Promise<void> {
   appState.loading = true
   try {
     const result = await api.bootstrap(filter)
+    // Prefs must land before the display set resolves: applyDisplaySet reads
+    // them to pick the view mode/sort, and setting the filter first keeps the
+    // toolbar in step with the rows the server just returned.
+    appState.userPrefs = result.userPrefs
+    appState.feedPrefs = result.feedPrefs
+    appState.filter = result.filter
     applyDisplaySet(result.entries)
     appState.nextCursor = result.nextCursor
     applyPanel({ feeds: result.feeds, categories: result.categories, counters: result.counters })
-    appState.userPrefs = result.userPrefs
-    appState.feedPrefs = result.feedPrefs
-    appState.filter = filter
     appState.session = { authenticated: true, username: appState.session.username }
   } finally {
     appState.loading = false
@@ -73,11 +77,14 @@ export async function reloadEntries(filter: EntriesFilter): Promise<void> {
   appState.loading = true
   try {
     await flushPending()
-    const result = await api.entries(filter)
+    // Callers may pass the bare identity filter from the URL; fold in this
+    // feed's saved view prefs so the fetched order matches the controls.
+    const resolved = resolveViewFilter(filter, appState.feedPrefs)
+    const result = await api.entries(resolved)
+    appState.filter = resolved
     applyDisplaySet(result.entries)
     appState.nextCursor = result.nextCursor
-    applyPanel(await api.panel((filter.feedId as FeedId | undefined) ?? null))
-    appState.filter = filter
+    applyPanel(await api.panel((resolved.feedId as FeedId | undefined) ?? null))
   } finally {
     appState.loading = false
   }
@@ -112,6 +119,13 @@ function resolveViewPrefs(): void {
 function applyPanel(next: FeedPanelResult): void {
   appState.panel = next
   for (const feed of next.feeds) appState.feedTitles[feed.id] = feed.title
+}
+
+/** Refetch the sidebar in place (pref toggles, renames) — no entries reload, so
+ *  the reading position and list survive. The current feed is passed so the
+ *  snapshot still names it when `hideEmptyFeeds` would otherwise omit it. */
+export async function refreshPanel(): Promise<void> {
+  applyPanel(await api.panel(currentFeedId()))
 }
 
 /** Identity filter change (URL navigation). */
@@ -379,6 +393,13 @@ export async function toggleHideEmptyFeeds(): Promise<void> {
     return // a failed persist leaves the row as it was (the old app awaited too)
   }
   appState.userPrefs = { ...appState.userPrefs, hideEmptyFeeds: next }
+  // The server omits empty feeds from `panel.feeds` while this pref is on, so
+  // flipping it off only reveals them once the snapshot is refetched.
+  try {
+    await refreshPanel()
+  } catch {
+    // The 60s idle poll will catch the sidebar up.
+  }
 }
 
 export async function toggleAutoRead(feedId: FeedId): Promise<void> {
@@ -420,7 +441,7 @@ export async function saveRename(): Promise<void> {
   } else {
     await api.renameCategory(id, title)
   }
-  applyPanel(await api.panel((appState.filter.feedId as FeedId | undefined) ?? null))
+  await refreshPanel()
   cancelRename()
 }
 

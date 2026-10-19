@@ -4,6 +4,7 @@
  * display set per view), and entry bodies leave the list payload (content
  * loads per card).
  */
+import type { EntriesFilter } from './filter'
 import type { CategoryId, EntryId, EntryStatus, EpochMs, FeedId } from './ids'
 import type { FeedPrefs, UserPrefs } from './prefs'
 
@@ -76,6 +77,9 @@ export interface BootstrapResult extends EntriesResult, FeedPanelResult {
   userPrefs: UserPrefs
   /** All per-feed view prefs (feedId -> prefs), hydrated once. */
   feedPrefs: Record<FeedId, FeedPrefs>
+  /** The submitted identity filter with this feed's view prefs folded in —
+   *  exactly the filter the returned entries were queried with. */
+  filter: EntriesFilter
 }
 
 export type SessionInfo = {
