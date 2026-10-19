@@ -45,7 +45,7 @@ function feed(stamps: number[], dayCounts: Map<number, number>, medGapMinutes: n
 }
 
 describe('buildFeedModel', () => {
-  test('punctual daily feed: one poll at the mode', () => {
+  test('punctual daily feed: two polls, inside the bell and past the tail', () => {
     const stamps: number[] = []
     const dayCounts = new Map<number, number>()
     for (let i = 0; i < 90; i++) {
@@ -54,13 +54,15 @@ describe('buildFeedModel', () => {
     }
     const m = buildFeedModel(feed(stamps, dayCounts, 24 * 60), OPTS)
     expect(m).not.toBeNull()
-    // 90 entries over 7 weekdays => no weekday signal, so budget collapses to
-    // N / learningWindowDays = 1 poll/day.
-    for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBe(1)
+    // 90 entries over 7 weekdays => no weekday signal, so the budget collapses
+    // to the item rate -- and the FLOOR of 2, because a day we expect a
+    // delivery needs a pair: one inside the bell, one past the tail. That pair
+    // is what catches a delivery that drifts late.
+    for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBe(2)
     const polls = m!.pollMinutes(3)
-    expect(polls).toHaveLength(1)
-    // one poll sits past the bulk of the mode, i.e. at/near 21:00
-    expect(Math.abs(polls[0]! - 21 * 60)).toBeLessThanOrEqual(5)
+    expect(polls).toHaveLength(2)
+    // one at the mode, one 20min past the observed tail
+    expect(polls).toEqual([21 * 60, 21 * 60 + 20])
   })
 
   test('bimodal feed: two modes are recognised', () => {
@@ -76,12 +78,13 @@ describe('buildFeedModel', () => {
     expect(m!.numModes).toBeGreaterThanOrEqual(2)
   })
 
-  test('two entries five minutes apart yield ONE poll, not 288', () => {
+  test('two entries five minutes apart yield TWO polls, not 288', () => {
     // The exact shape that made Miniflux poll Framework Blog every 5 minutes.
+    // The budget floor is 2, never the entry count.
     const dayCounts = new Map<number, number>([[day(0), 2]])
     const m = buildFeedModel(feed([20 * 60, 20 * 60 + 5], dayCounts, 5), OPTS)
     expect(m).not.toBeNull()
-    for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBe(1)
+    for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBe(2)
   })
 
   test('clustering cannot inflate the budget', () => {
@@ -117,7 +120,8 @@ describe('buildFeedModel', () => {
     expect(m).not.toBeNull()
     expect(m!.dowSignal).toBe(true)
     const publishDow = new Date(19000 * 86400_000).getUTCDay()
-    expect(m!.budget[publishDow]).toBe(1)
+    // Publish day: the delivery pair (inside the bell + past the tail).
+    expect(m!.budget[publishDow]).toBe(2)
     // Non-publish days fall back to the 1/day floor rather than being starved.
     for (let d = 0; d < 7; d++) {
       if (d !== publishDow) expect(m!.budget[d]).toBe(1)
@@ -199,7 +203,9 @@ describe('rate EMA', () => {
     const stamps = new Array<number>(1200).fill(12 * 60)
     const m = buildFeedModel(feed(stamps, dayCounts, 60), OPTS)
     expect(m).not.toBeNull()
-    expect(m!.budget[0]).toBe(1)
+    // The floor is 2 while the feed is still active on any day at all: a
+    // stalled feed errs toward noticing recovery.
+    expect(m!.budget[0]).toBe(2)
   })
 })
 

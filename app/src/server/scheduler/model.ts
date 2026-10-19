@@ -35,7 +35,21 @@ const DATE_ONLY_MIN_POLLUTES = 3
 const MIN_DOW_SAMPLES = 12 // weekday gate needs >= 12 DISTINCT active days to mean anything
 
 // ---- placement ----
-const SINGLE_POLL_QUANTILE = 0.85
+/** Place the last poll this far past the observed tail, so a delivery that
+ *  drifts past every seen publish time is still caught the same day. */
+const TAIL_MARGIN_MINUTES = 20
+/** Retry cadence while an expected delivery has not yet arrived. */
+export const RETRY_STEP_MINUTES = 10
+/** How far past the delivery window retries keep looking. Drift is the norm
+ *  (QC has run an hour late), and the chain STOPS on delivery, so a generous
+ *  reach costs one or two requests on a normal day and buys the late ones. */
+export const RETRY_REACH_MINUTES = 120
+/** Hard ceiling on the chain, so a feed that never delivers cannot spin. */
+export const MAX_RETRIES = 24
+/** Insurance spacing, for feeds that publish outside their learned window. */
+const INSURANCE_MINUTES = 240
+/** Above this share of out-of-window publishes, insurance is worth paying for. */
+export const OUTSIDE_FRAC_THRESHOLD = 0.05
 
 export interface FeedInput {
   feedId: FeedId
@@ -78,6 +92,13 @@ export interface FeedModel {
   publishDays: Set<number>
   /** Cached poll placement (minutes-of-day, ascending) for a weekday's budget. */
   pollMinutes(dow: number): number[]
+  /** Share of stamps landing outside the delivery window. > 0.05 means the feed
+   *  HAS published at an unexpected hour, so insurance polling is earned. */
+  outsideFrac: number
+  /** Start of the ~90%-mass delivery window, in minutes-of-day (UTC). */
+  deliveryStartMinute: number
+  /** Width of that window in minutes. */
+  deliverySpanMinute: number
 }
 
 const clamp = (x: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, x))
@@ -199,6 +220,36 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
   const meanDens = dens.reduce((a, b) => a + b, 0) / DENSITY_BINS
   const concentrated = peak > CONCENTRATION_RATIO * meanDens
 
+  // Smallest window holding ~90% of the mass -- where a delivery is expected --
+  // and the share of stamps landing OUTSIDE it. The window drives retry-until-
+  // delivery; the share says whether insurance polling is worth paying for.
+  const totalDens = dens.reduce((a, b) => a + b, 0)
+  let deliverySpan = MINUTES_PER_DAY
+  let deliveryStart = 0
+  for (let s = 0; s < DENSITY_BINS; s++) {
+    let acc = 0
+    let span = 0
+    for (let k = 0; k < DENSITY_BINS; k++) {
+      acc += dens[(s + k) % DENSITY_BINS] as number
+      span = (k + 1) * BIN_MINUTES
+      if (acc >= 0.9 * totalDens) break
+    }
+    if (span < deliverySpan) {
+      deliverySpan = span
+      deliveryStart = s * BIN_MINUTES
+    }
+  }
+  const inDeliveryWindow = (m: number) =>
+    ((m - deliveryStart + MINUTES_PER_DAY) % MINUTES_PER_DAY) <= deliverySpan
+  // Stamps past the window AND the retry reach: the publishes retry-until-
+  // delivery cannot see by construction. That is what insurance exists for.
+  const reach = deliverySpan + 60
+  const outsideFrac = stamps.length
+    ? stamps.filter((m) => ((m - deliveryStart + MINUTES_PER_DAY) % MINUTES_PER_DAY) > reach).length /
+      stamps.length
+    : 0
+  void inDeliveryWindow
+
   // Count significant modes so a bimodal feed cannot starve its minority mode.
   // The RAW-count support requirement is essential: without it sparse feeds
   // get phantom modes from the smoothing alone.
@@ -251,7 +302,13 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
   // The floor must never exceed the ceiling: a date-only feed on an instance
   // configured for < 3 polls/day would otherwise get clamp(x, 3, 2) = 3 and
   // silently poll MORE often than the configured maximum.
-  const floorPolls = Math.min(dateOnly ? DATE_ONLY_MIN_POLLUTES : 1, opts.maxPollsPerDay)
+  //
+  // Two polls on a day we expect a delivery: one inside the bell, one past the
+  // observed tail. That pair is what catches a delivery that drifts late, which
+  // is why the floor is 2 and not 1. A day with no expected delivery needs only
+  // one, so it is left alone.
+  const floorFor = (p: number) =>
+    Math.min(dateOnly ? DATE_ONLY_MIN_POLLUTES : p > 0 ? 2 : 1, opts.maxPollsPerDay)
   const budget: number[] = []
   for (let d = 0; d < 7; d++) {
     const p = dowSignal ? (publishDays.has(d) ? 1 : 0) : activeDays / learnDays
@@ -261,7 +318,7 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
           Math.ceil(perActiveDay * p * opts.entryFrequencyFactor - CEIL_EPS),
           p >= 1 ? numModes : 1,
         ),
-        floorPolls,
+        floorFor(p),
         opts.maxPollsPerDay,
       ),
     )
@@ -269,6 +326,9 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
 
   // Placement depends only on B, so cache one schedule per distinct B.
   const ptCache = new Map<number, number[]>()
+  let tailRot = 0
+  for (const v of rot) if (v > tailRot) tailRot = v
+  const tailMinute = toOrig(tailRot)
   const pollMinutes = (dow: number): number[] => {
     const b = budget[dow] ?? 1
     const hit = ptCache.get(b)
@@ -277,14 +337,33 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
     if (dateOnly) {
       // No time-of-day signal: uniform coverage of the day.
       for (let k = 1; k <= b; k++) pts.push(((k - 0.5) * MINUTES_PER_DAY) / b)
-    } else if (b === 1) {
-      // One poll: put it past the bulk of the mode (85th percentile) so
-      // little arrives after it within the day.
-      pts.push(toOrig(quantile(rot, SINGLE_POLL_QUANTILE)))
     } else {
-      // Median of each equal-mass slice: sits inside the bell, so a
-      // multimodal distribution gets one poll per mode region.
-      for (let k = 1; k <= b; k++) pts.push(toOrig(quantile(rot, (k - 0.5) / b)))
+      // Last poll sits past the observed tail, so a delivery that lands after
+      // every previously seen publish time is still caught today. The earlier
+      // polls sit at the centres of equal-mass slices -- proportional to the
+      // histogram, one poll per mode region.
+      const last = (tailMinute + TAIL_MARGIN_MINUTES) % MINUTES_PER_DAY
+      for (let k = 1; k <= b; k++) {
+        const m = toOrig(quantile(rot, (k - 0.5) / b))
+        pts.push(k === b ? Math.max(m, last) : m)
+      }
+      pts.push(last)
+    }
+    // Insurance: only for feeds with a measured history of publishing past
+    // their window, and only in the STRETCHED-OUT gaps. A feed already polled
+    // every 36 minutes has nothing to insure; one polled twice a day does.
+    if (outsideFrac > OUTSIDE_FRAC_THRESHOLD) {
+      const filled: number[] = []
+      for (let i = 0; i < pts.length; i++) {
+        const a = pts[i] as number
+        const b = pts[(i + 1) % pts.length] as number
+        const gap = (b - a + MINUTES_PER_DAY) % MINUTES_PER_DAY
+        for (let g = INSURANCE_MINUTES; g < gap; g += INSURANCE_MINUTES) {
+          filled.push((a + g) % MINUTES_PER_DAY)
+        }
+      }
+      pts.push(...filled)
+      pts.sort((x, y) => x - y)
     }
     pts.sort((x, y) => x - y)
     const uniq: number[] = []
@@ -307,6 +386,9 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
     medGapMinutes,
     dowSignal,
     publishDays,
+    outsideFrac,
+    deliveryStartMinute: deliveryStart,
+    deliverySpanMinute: deliverySpan,
     pollMinutes,
   }
 }

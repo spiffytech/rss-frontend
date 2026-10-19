@@ -44,11 +44,15 @@ import {
   epochDay,
   expandMinuteCounts,
   planTarget,
+  RETRY_REACH_MINUTES,
+  RETRY_STEP_MINUTES,
+  MAX_RETRIES,
   type FeedInput,
   type FeedModel,
   type FeedScheduleState,
 } from './model'
 import { notify } from './notify'
+import { renewDue } from '../websub'
 
 /**
  * Runtime kill switch, same operational contract as the old app: touching this
@@ -140,12 +144,21 @@ export function startScheduler(opts?: { handle?: ReaderHandle; config?: Schedule
   let reportedOff = false
   const inFlight = new Set<FeedId>()
   const hostsInFlight = new Set<string>()
+  /** Retries remaining per feed while an expected delivery has not arrived. */
+  const retryState = new Map<FeedId, number>()
+  /** Last WebSub lease sweep. Leases run 8 days and renew at 2 left. */
+  let lastWebsubRenewAt = 0
 
   markSchedulerStarted()
   void notify(config.ntfyUrl, 'reader scheduler started', `pid ${process.pid}`)
 
-  /** One fetch completion: record the origin's floor, then replan freely. */
-  const afterFetch = (feed: FeedScheduleState, floorMs: number | null): void => {
+  /** One fetch completion: record the origin's floor, then replan freely.
+   *
+   *  `inserted` is what the fetch actually brought back — null when we cannot
+   *  tell (transport error, rate limit). This is the signal retry-until-delivery
+   *  runs on: inside the learned delivery window, an empty fetch means the
+   *  delivery is LATE, not absent, so look again shortly rather than tomorrow. */
+  const afterFetch = (feed: FeedScheduleState, floorMs: number | null, inserted: number | null): void => {
     try {
       handle.db
         .update(feeds)
@@ -154,18 +167,51 @@ export function startScheduler(opts?: { handle?: ReaderHandle; config?: Schedule
         .run()
       const row = handle.db.select().from(feeds).where(eq(feeds.id, feed.id)).get()
       if (!row) return
-      const target = planTarget(
-        {
-          id: row.id,
-          url: row.feedUrl,
-          checkedAt: row.checkedAt,
-          nextCheckAt: row.nextCheckAt,
-          parsingErrorCount: row.parsingErrorCount,
-        },
-        models?.models.get(feed.id) ?? null,
-        bounds,
-        { nowMs: Date.now(), justFetched: true },
-      )
+      const model = models?.models.get(feed.id) ?? null
+
+      // A delivery landed: the chain is done, plan the next bell.
+      if (inserted === null || inserted > 0) retryState.delete(feed.id)
+
+      const nowMs = Date.now()
+      let retryTarget: number | null = null
+      if (model && inserted === 0) {
+        // Only on days the model EXPECTS a delivery. A weekend with no comic
+        // due must not burn a retry chain on an empty feed.
+        const dow = new Date(nowMs).getUTCDay()
+        const expectingDelivery = (model.budget[dow] ?? 1) >= 2
+        const nowMin = (nowMs / 60_000) % 1440
+        const intoWindow =
+          ((nowMin - model.deliveryStartMinute + 1440) % 1440) <=
+          model.deliverySpanMinute + RETRY_REACH_MINUTES
+        if (expectingDelivery && intoWindow) {
+          const left =
+            retryState.get(feed.id) ??
+            Math.min(
+              MAX_RETRIES,
+              Math.ceil((model.deliverySpanMinute + RETRY_REACH_MINUTES) / RETRY_STEP_MINUTES),
+            )
+          if (left > 0) {
+            retryState.set(feed.id, left - 1)
+            // Anchored on checkedAt: `now + X` chases the clock and never comes due.
+            retryTarget = (row.checkedAt ?? nowMs) + RETRY_STEP_MINUTES * 60_000
+          }
+        }
+      }
+
+      const target =
+        retryTarget ??
+        planTarget(
+          {
+            id: row.id,
+            url: row.feedUrl,
+            checkedAt: row.checkedAt,
+            nextCheckAt: row.nextCheckAt,
+            parsingErrorCount: row.parsingErrorCount,
+          },
+          model,
+          bounds,
+          { nowMs, justFetched: true },
+        )
       applyTargets(handle.db, [
         { id: feed.id, target: epochMs(target), expectedCheckedAt: row.checkedAt },
       ])
@@ -180,6 +226,8 @@ export function startScheduler(opts?: { handle?: ReaderHandle; config?: Schedule
     hostsInFlight.add(host)
     void (async () => {
       let floorMs: number | null = null
+      // null = we cannot tell whether anything arrived (transport error, 429).
+      let inserted: number | null = null
       try {
         const result = await fetchAndIngest({ handle, feedId: feed.id })
         const hint =
@@ -189,13 +237,15 @@ export function startScheduler(opts?: { handle?: ReaderHandle; config?: Schedule
               ? result.freshnessMs
               : null
         if (hint != null) floorMs = Date.now() + hint
+        if (result.kind === 'ok') inserted = result.inserted
+        else if (result.kind === 'not-modified') inserted = 0
       } catch (e) {
         console.error('scheduler: fetch failed', feed.id, e)
       } finally {
         inFlight.delete(feed.id)
         hostsInFlight.delete(host)
       }
-      afterFetch(feed, floorMs)
+      afterFetch(feed, floorMs, inserted)
     })()
   }
 
@@ -218,6 +268,13 @@ export function startScheduler(opts?: { handle?: ReaderHandle; config?: Schedule
         if (model) built.set(feedId, model)
       }
       models = { builtAt: now, models: built }
+    }
+
+    // WebSub lease renewal, at most hourly. Housekeeping only: a sweep that
+    // never runs just lapses the subscriptions back to polling.
+    if (now - lastWebsubRenewAt > 60 * 60_000) {
+      lastWebsubRenewAt = now
+      void renewDue(handle, now).catch(() => {})
     }
 
     // Fetch pass first: `next_check_at IS NULL` means due, and a fetch that
