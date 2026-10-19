@@ -43,12 +43,19 @@ if (hostMax > HOST_MAX_10MIN) alarms.push(`host-rate host10mmax=${hostMax} > ${H
 const backlog = rows(`SELECT count(*) c FROM feeds WHERE next_check_at < ? AND NOT disabled`, NOW)[0].c
 if (backlog > BACKLOG_MAX) alarms.push(`backlog ${backlog} > ${BACKLOG_MAX}`)
 
-// --- quality: publish-to-read latency of recent fetches ---
+// --- quality: publish-to-read latency of RECENT publishes ---
+// Measuring `created_at - published_at` on everything recently ingested is
+// wrong for backfill: a newly-added feed brings its whole history, and one
+// entry from 2021 drags p90 to weeks with nothing actually going wrong. So
+// only count items PUBLISHED in the last 48h -- those are the ones where a
+// miss is both real and actionable. Older arrivals are history, not latency,
+// and the `behind` counter is what flags a feed sitting on uncollected items.
 const lat = rows(
   `SELECT (created_at - published_at) / 60000.0 AS m FROM entries
-    WHERE created_at > ? AND published_at > 1609459200000
+    WHERE published_at > ? AND published_at > 1609459200000
+      AND created_at >= published_at
     ORDER BY m`,
-  NOW - 6 * 3600e3,
+  NOW - 48 * 3600e3,
 ).map((r) => r.m)
 const q = (p) => (lat.length ? lat[Math.min(lat.length - 1, Math.floor(p * lat.length))] : null)
 const f = (v) => (v == null ? '-' : v.toFixed(0))
