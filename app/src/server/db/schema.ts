@@ -72,6 +72,13 @@ export const feeds = sqliteTable(
      *  floor from Retry-After / cache freshness (epoch-ms). */
     nextCheckAt: integer('next_check_at').$type<EpochMs>(),
     fetchAfterAt: integer('fetch_after_at').$type<EpochMs>(),
+    /** WebSub: the hub this feed advertises, and when our lease on it expires.
+     *  A feed with no hub simply has nulls and stays on polling. */
+    websubHub: text('websub_hub'),
+    websubLeaseUntil: integer('websub_lease_until').$type<EpochMs>(),
+    /** Unguessable per-feed token: /api/websub/<token> is the public callback.
+     *  Also the HMAC secret the hub signs notifications with. */
+    websubToken: text('websub_token'),
     disabled: integer('disabled', { mode: 'boolean' }).notNull().default(false),
     createdAt: integer('created_at').$type<EpochMs>().notNull(),
   },

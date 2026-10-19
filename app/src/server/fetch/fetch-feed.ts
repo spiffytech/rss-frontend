@@ -18,6 +18,7 @@ import { entries, feeds } from '../db/schema'
 import { syncEntrySearch, type SearchRow } from '../db/search-sync'
 import { estimateReadingTime } from '../reader/reading-time'
 import { parseFeedBody, type ParsedItem } from './parse'
+import { ensureSubscribed } from '../websub'
 import type { FetchOutcome } from './transport'
 import { fetchFeed } from './transport'
 import { ensureFeedIcon } from './icons'
@@ -89,6 +90,11 @@ export function ingestFeedOutcome(opts: {
     bumpErrors(outcome.fetchedAt)
     return { kind: 'error', message: String(error) }
   }
+
+  // Opportunistic WebSub discovery: the document is already in hand, so finding
+  // `rel="hub"` costs nothing on the common path. Fire-and-forget — a hub that
+  // is slow or down must never delay or fail an ingest.
+  void ensureSubscribed(opts.handle, opts.feedId, feed.feedUrl, outcome.body, now).catch(() => {})
 
   const counts = sqlite.transaction(() => {
     let inserted = 0
