@@ -10,6 +10,7 @@
   import EntryList from '../client/components/EntryList.svelte'
   import {
     appState,
+    effectiveViewMode,
     loadBootstrap,
     checkTail,
     reloadEntries,
@@ -46,7 +47,7 @@
 
     void loadBootstrap(initialFilter)
     const stopKeys = attachKeyboard(() => {
-      setViewMode(appState.viewModeOverride === 'expanded' ? 'list' : 'expanded')
+      setViewMode(effectiveViewMode() === 'expanded' ? 'list' : 'expanded')
     })
     const stopIdle = startIdleRefresh()
     return () => {

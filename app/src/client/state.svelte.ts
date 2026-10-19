@@ -330,6 +330,18 @@ function currentFeedId(): FeedId | null {
   return (appState.filter.feedId as FeedId | undefined) ?? null
 }
 
+/** The view mode in effect right now: a session override, else the current
+ *  feed's saved pref, else the default. The menu toggle, its label, the `v` key
+ *  and EntryItem all resolve through this — deriving the next mode from the raw
+ *  override alone made the first toggle a no-op whenever no pref was saved. */
+export function effectiveViewMode(): 'expanded' | 'list' {
+  return (
+    appState.viewModeOverride ??
+    (appState.filter.feedId ? appState.feedPrefs[appState.filter.feedId as FeedId]?.viewMode : undefined) ??
+    DEFAULT_VIEW_MODE
+  )
+}
+
 export function setViewMode(viewMode: 'expanded' | 'list'): void {
   appState.viewModeOverride = viewMode
   const feedId = currentFeedId()
@@ -359,17 +371,25 @@ export function setHideReadItems(hideReadItems: boolean): void {
   void reloadEntries(appState.filter)
 }
 
-export function toggleHideEmptyFeeds(): void {
+export async function toggleHideEmptyFeeds(): Promise<void> {
   const next = !(appState.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
+  try {
+    await api.setUserPrefs({ hideEmptyFeeds: next })
+  } catch {
+    return // a failed persist leaves the row as it was (the old app awaited too)
+  }
   appState.userPrefs = { ...appState.userPrefs, hideEmptyFeeds: next }
-  void api.setUserPrefs({ hideEmptyFeeds: next })
 }
 
-export function toggleAutoRead(feedId: FeedId): void {
+export async function toggleAutoRead(feedId: FeedId): Promise<void> {
   const list = appState.userPrefs.disabledAutoReadFeeds ?? []
   const next = list.includes(feedId) ? list.filter((f) => f !== feedId) : [...list, feedId]
+  try {
+    await api.setUserPrefs({ disabledAutoReadFeeds: next })
+  } catch {
+    return // idem: no silent flip when the write fails
+  }
   appState.userPrefs = { ...appState.userPrefs, disabledAutoReadFeeds: next }
-  void api.setUserPrefs({ disabledAutoReadFeeds: next })
 }
 
 // ---- Icon fallback + rename editor ----
@@ -406,7 +426,8 @@ export async function saveRename(): Promise<void> {
 
 export async function unsubscribe(feedId: FeedId): Promise<void> {
   await api.unsubscribe(feedId)
-  applyPanel(await api.panel((appState.filter.feedId as FeedId | undefined) ?? null))
+  // No currentFeed: asking the panel to name the feed we just deleted is pointless.
+  applyPanel(await api.panel(null))
 }
 
 // ---- Idle refresh (old polling composable): keep the sidebar honest while

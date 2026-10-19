@@ -20,10 +20,9 @@
   import { createSearch } from '../search.svelte.js'
   import {
     appState,
+    effectiveViewMode,
     markDisplayed,
     refreshFeeds,
-    reloadEntries,
-    setFilter,
     setHideReadItems,
     setSort,
     setViewMode,
@@ -58,7 +57,6 @@
     (appState.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId as never),
   )
 
-  let markingAll = $state(false)
   let renameOpen = $state(false)
   let renameTitle = $state('')
 
@@ -144,20 +142,14 @@
 
   // ---- Actions ----
 
-  async function onMarkAllRead() {
-    if (markingAll) return
-    markingAll = true
-    try {
-      markDisplayed()
-    } finally {
-      markingAll = false
-      closePanel()
-    }
+  function onMarkAllRead() {
+    markDisplayed()
+    closePanel()
   }
 
   const onRefresh = () => runAndClose(() => refreshFeeds())
   const onViewMode = () =>
-    runAndClose(() => setViewMode(appState.viewModeOverride === 'expanded' ? 'list' : 'expanded'))
+    runAndClose(() => setViewMode(effectiveViewMode() === 'expanded' ? 'list' : 'expanded'))
   const onSort = () =>
     runAndClose(() => setSort((appState.filter.sort ?? 'oldest') === 'newest' ? 'oldest' : 'newest'))
   const onToggleAutoRead = () => runAndClose(() => toggleAutoRead(feedId as never))
@@ -307,11 +299,10 @@
           <button
             type="button"
             class="w-full min-h-12 flex items-center justify-center gap-x-2 rounded-lg bg-accent text-white font-semibold cursor-pointer hover:brightness-95 active:brightness-90 disabled:opacity-60"
-            disabled={markingAll}
             onclick={onMarkAllRead}
           >
             <span aria-hidden="true">&#10003;</span>
-            <span>{markingAll ? 'Marking…' : 'Mark all read'}</span>
+            <span>Mark all read</span>
           </button>
         </div>
 
@@ -322,7 +313,7 @@
              button the same width. -->
         <div class="p-2 grid grid-cols-2 gap-1 border-b border-line">
           <button type="button" class="menu-row" onclick={onViewMode}>
-            View: {appState.viewModeOverride === 'expanded' || (!appState.viewModeOverride && true) ? 'expanded' : 'list'}
+            View: {effectiveViewMode()}
           </button>
           {#if isFeedView}
             <button type="button" class="menu-row" onclick={onSort}>

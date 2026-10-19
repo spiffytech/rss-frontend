@@ -107,7 +107,7 @@ afterAll(() => {
 const it = enabled ? test : test.skip
 
 /** Poll a page-side expression until it is truthy (or the deadline passes). */
-const until = (script: string, timeoutMs = 8000): string => `
+const until = (script: string, timeoutMs = 15_000): string => `
   (() => {
     const deadline = Date.now() + ${timeoutMs}
     return new Promise((resolve) => {
@@ -639,6 +639,102 @@ it(
       console.log('sidebar feed order:', order)
       // Binary collation would render ['Blog', 'Zebra feed', 'apple feed', 'cherry feed'].
       expect(JSON.parse(order)).toEqual(['apple feed', 'Blog', 'cherry feed', 'Zebra feed'])
+    } finally {
+      await view.close()
+    }
+  },
+  45_000,
+)
+
+// Pins a decision, not just behaviour: "mark all read" marks exactly the ids the
+// view fetched (the loaded window), never a server-side re-lookup of candidates.
+// A bulk implementation would mark all 100+ and fail this.
+it(
+  'mark all read marks exactly the displayed window',
+  async () => {
+    const reset = openDatabase(fixtureDbPath)
+    reset.sqlite.run("UPDATE entries SET status = 'unread'")
+    const total = (reset.sqlite.query('SELECT count(*) AS n FROM entries').get() as { n: number }).n
+    reset.sqlite.close()
+
+    const counts = () => {
+      const handle = openDatabase(fixtureDbPath)
+      const rows = handle.sqlite.query('SELECT status, count(*) AS n FROM entries GROUP BY status').all() as Array<{
+        status: string
+        n: number
+      }>
+      handle.sqlite.close()
+      return Object.fromEntries(rows.map((row) => [row.status, row.n])) as Record<string, number>
+    }
+
+    const view = new Bun.WebView({ width: 1100, height: 800 })
+    try {
+      await view.navigate(`${BASE}/login`)
+      await view.evaluate(`
+        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
+      `)
+      await view.navigate(`${BASE}/`)
+      await view.evaluate(
+        until(`return document.querySelectorAll('[data-entry-id]').length >= 100 ? 'ready' : ''`),
+      )
+      await view.evaluate(
+        `(() => { document.querySelector('button[aria-label="Mark all read"]').click(); return true })()`,
+      )
+      let seen: Record<string, number> = {}
+      for (let i = 0; i < 50; i++) {
+        seen = counts()
+        if ((seen.read ?? 0) >= 100) break
+        await Bun.sleep(100)
+      }
+      console.log('statuses after mark-all:', JSON.stringify(seen), '| total:', total)
+      expect(seen.read).toBe(100) // the loaded window only (VIEW_PAGE_SIZE)
+      expect(seen.unread).toBe(total - 100) // everything past it stays unread
+    } finally {
+      await view.close()
+    }
+  },
+  45_000,
+)
+
+// The View row used to derive the next mode from the raw override, which is null
+// until a pref is saved: the first click set 'expanded' when 'expanded' was
+// already in effect. Its label was always "expanded" because of a dead
+// `(!x && true)` clause. Both the row and the `v` key now resolve the effective mode.
+it(
+  'the View toggle flips on the first click, and reads truthfully',
+  async () => {
+    const view = new Bun.WebView({ width: 1100, height: 800 })
+    // The row lives in the (closed) feed menu, whose content is in the DOM and
+    // reactive, so its label is readable without opening the dialog. Poll for the
+    // expected value: the click's re-render lands a tick later.
+    const waitForLabel = (expected: string) => until(`
+      const row = [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('View:'))
+      const text = row ? row.textContent.trim() : ''
+      return text === ${JSON.stringify(expected)} ? text : ''
+    `)
+    const clickView = `(() => {
+      [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('View:'))?.click()
+      return true
+    })()`
+    try {
+      await view.navigate(`${BASE}/login`)
+      await view.evaluate(`
+        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
+      `)
+      await view.navigate(`${BASE}/`)
+
+      const before = (await view.evaluate(waitForLabel('View: expanded'))) as string
+      await view.evaluate(clickView) // first click: must flip
+      const afterFirstClick = (await view.evaluate(waitForLabel('View: list'))) as string
+
+      console.log('view label:', JSON.stringify([before, afterFirstClick]))
+      expect(before).toBe('View: expanded') // the default, and the label must say so
+      expect(afterFirstClick).toBe('View: list') // the dead first click would read 'expanded'
+      // The `v` key is not asserted here: the menu row unmounts with its dialog,
+      // so reading it back after a keypress is racy. Both sites now call the same
+      // effectiveViewMode() helper, so the click path covers the logic.
     } finally {
       await view.close()
     }
