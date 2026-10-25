@@ -1,7 +1,8 @@
 import { Show } from "solid-js";
+import { useSearchParams } from "@solidjs/router";
 
 import { createSearch } from "../lib/search";
-import { markDisplayed, moveAndRead } from "../lib/state";
+import { useReader } from '../lib/reader-context'
 import { FeedMenu } from "./FeedMenu";
 
 /**
@@ -13,7 +14,13 @@ import { FeedMenu } from "./FeedMenu";
  * menu popover, which leaves the header three touch targets wide instead of six.
  */
 export const TopToolbar = (props: { onToggleSidebar: () => void; reading: boolean }) => {
-  const search = createSearch();
+  const r = useReader()
+  const { markDisplayed, moveAndRead } = r
+  const [, setSearchParams] = useSearchParams();
+  // Debounced typing writes the URL; the URL is the search state.
+  const search = createSearch(r, (term) =>
+    setSearchParams({ search: term, cursor: undefined }, { replace: true }),
+  );
 
   const onMarkAllRead = (): void => {
     // Explicit-ID semantics: marks exactly the IDs this view fetched (the loaded

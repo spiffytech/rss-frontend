@@ -1,5 +1,5 @@
 import { Show, createMemo, createSignal, onSettled } from "solid-js";
-import { useNavigate } from "@solidjs/router";
+import { useNavigate, useSearchParams } from "@solidjs/router";
 
 import type { FeedId } from "../shared/ids";
 import { computePopoverPlacement } from "../shared/popover";
@@ -7,23 +7,7 @@ import { DEFAULT_HIDE_EMPTY_FEEDS } from "../shared/prefs";
 import { autofocus } from "../lib/observers";
 import { createSearch } from "../lib/search";
 import * as api from "../server/actions";
-import {
-  currentTitle,
-  effectiveViewMode,
-  isFavorite,
-  markDisplayed,
-  reader,
-  refreshFeeds,
-  refreshPanel,
-  setHideReadItems,
-  setSort,
-  setViewMode,
-  toggleAutoRead,
-  toggleFavorite,
-  toggleHideEmptyFeeds,
-  unreadCount,
-  unsubscribe,
-} from "../lib/state";
+import { useReader } from '../lib/reader-context'
 
 const PANEL_ID = "feed-menu";
 
@@ -43,25 +27,31 @@ const PANEL_ID = "feed-menu";
  * hover, because hover does not exist on a touchscreen.
  */
 export const FeedMenu = () => {
+  const r = useReader()
+  const { currentTitle, effectiveViewMode, isFavorite, markDisplayed, refreshFeeds, refreshPanel, setHideReadItems, setSort, setViewMode, toggleAutoRead, toggleFavorite, toggleHideEmptyFeeds, unreadCount, unsubscribe } = r
   // A setting in its affirmative state (enabled, hidden) carries the accent
   // fill. This follows the row's own value, not the underlying boolean: blue on
   // "Auto-read: disabling" would read as a contradiction.
   const TOGGLE_ON = "bg-accent/15 hover:bg-accent/20 active:bg-accent/25";
 
   const navigate = useNavigate();
-  const search = createSearch();
+  const [, setSearchParams] = useSearchParams();
+  // Debounced typing writes the URL; the URL is the search state.
+  const search = createSearch(r, (term) =>
+    setSearchParams({ search: term, cursor: undefined }, { replace: true }),
+  );
 
   let triggerEl: HTMLButtonElement | undefined;
   let panelEl: HTMLDialogElement | undefined;
   const [open, setOpen] = createSignal(false);
 
-  const feedId = () => reader.filter.feedId;
+  const feedId = () => r.data.filter.feedId;
   // Rename/unsubscribe/sort/auto-read only mean something for one feed — Latest,
   // Starred and category views are aggregates.
   const isFeedView = () => feedId() != null && feedId() !== "";
-  const searchActive = () => Boolean(reader.filter.search);
+  const searchActive = () => Boolean(r.data.filter.search);
   const autoReadOff = () =>
-    (reader.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
+    (r.data.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
 
   const [renameOpen, setRenameOpen] = createSignal(false);
   const [renameTitle, setRenameTitle] = createSignal("");
@@ -161,11 +151,11 @@ export const FeedMenu = () => {
   const onViewMode = () =>
     runAndClose(() => setViewMode(effectiveViewMode() === "expanded" ? "list" : "expanded"));
   const onSort = () =>
-    runAndClose(() => setSort((reader.filter.sort ?? "oldest") === "newest" ? "oldest" : "newest"));
+    runAndClose(() => setSort((r.data.filter.sort ?? "oldest") === "newest" ? "oldest" : "newest"));
   const onToggleAutoRead = () => runAndClose(() => toggleAutoRead(feedId() as FeedId));
   const onHideEmptyFeeds = () => runAndClose(() => toggleHideEmptyFeeds());
   const onHideReadItems = () =>
-    runAndClose(() => setHideReadItems(!(reader.filter.hideReadItems ?? true)));
+    runAndClose(() => setHideReadItems(!(r.data.filter.hideReadItems ?? true)));
   const onClearSearch = () => runAndClose(() => search.clearSearch());
 
   const startRenameEditor = (): void => {
@@ -242,8 +232,8 @@ export const FeedMenu = () => {
           </span>
         </Show>
         <Show when={searchActive()}>
-          <span class="shrink-0 max-w-24 truncate text-xs text-muted" title={reader.filter.search}>
-            &#128269; {reader.filter.search}
+          <span class="shrink-0 max-w-24 truncate text-xs text-muted" title={r.data.filter.search}>
+            &#128269; {r.data.filter.search}
           </span>
         </Show>
         <span class="shrink-0 text-xs text-muted" aria-hidden="true">
@@ -307,7 +297,7 @@ export const FeedMenu = () => {
                 <Show when={isFeedView() && !searchActive()}>
                   <button type="button" class="menu-row" onClick={onSort}>
                     Sort:{" "}
-                    {(reader.filter.sort ?? "oldest") === "oldest"
+                    {(r.data.filter.sort ?? "oldest") === "oldest"
                       ? "oldest first"
                       : "newest first"}
                   </button>
@@ -327,27 +317,27 @@ export const FeedMenu = () => {
                   class={[
                     "menu-row",
                     {
-                      [TOGGLE_ON]: reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+                      [TOGGLE_ON]: r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
                     },
                   ]}
                   aria-pressed={
-                    (reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? "true" : "false"
+                    (r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? "true" : "false"
                   }
                   onClick={onHideEmptyFeeds}
                 >
                   Empty feeds:{" "}
-                  {(reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
+                  {(r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
                     ? "hidden"
                     : "shown"}
                 </button>
                 <Show when={!searchActive()}>
                   <button
                     type="button"
-                    class={["menu-row", { [TOGGLE_ON]: reader.filter.hideReadItems ?? true }]}
-                    aria-pressed={(reader.filter.hideReadItems ?? true) ? "true" : "false"}
+                    class={["menu-row", { [TOGGLE_ON]: r.data.filter.hideReadItems ?? true }]}
+                    aria-pressed={(r.data.filter.hideReadItems ?? true) ? "true" : "false"}
                     onClick={onHideReadItems}
                   >
-                    Read items: {(reader.filter.hideReadItems ?? true) ? "hidden" : "shown"}
+                    Read items: {(r.data.filter.hideReadItems ?? true) ? "hidden" : "shown"}
                   </button>
                 </Show>
               </div>

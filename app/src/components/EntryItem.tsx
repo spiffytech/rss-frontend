@@ -5,14 +5,7 @@ import { timeAgo } from '../shared/util'
 import { trackEntry } from '../lib/observers'
 import { sinkEntryContent, transformEntryContent } from '../lib/display/render'
 import * as api from '../server/actions'
-import {
-  autoRead,
-  effectiveViewMode,
-  reader,
-  toggleExpanded,
-  toggleRead,
-  toggleStar,
-} from '../lib/state'
+import { useReader } from '../lib/reader-context'
 
 /**
  * One entry card. Structure and classes come verbatim from the pre-port reader;
@@ -25,10 +18,12 @@ import {
  * the row expands.
  */
 export const EntryItem = (props: { entry: EntrySummary }) => {
+  const r = useReader()
+  const { autoRead, effectiveViewMode, toggleExpanded, toggleRead, toggleStar } = r
   const unread = () => props.entry.status === 'unread'
   const isExpandedView = () => effectiveViewMode() === 'expanded'
   const showContent = () =>
-    isExpandedView() || reader.expandedIds.includes(props.entry.id)
+    isExpandedView() || r.session.expandedIds.includes(props.entry.id)
 
   const [mounted, setMounted] = createSignal(false)
   let contentEl: HTMLDivElement | undefined
@@ -147,7 +142,7 @@ export const EntryItem = (props: { entry: EntrySummary }) => {
     <article
       id={`entry-${props.entry.id}`}
       data-entry-id={props.entry.id}
-      ref={(element) => trackEntry(element, props.entry.id)}
+      ref={(element) => trackEntry(r, element, props.entry.id)}
       class={[
         'msgFrame px-3 py-2.5 border-b border-gray-200',
         unread() ? 'bg-white' : 'bg-gray-50',

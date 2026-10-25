@@ -2,7 +2,7 @@ import { For, Show } from 'solid-js'
 
 import { EntryItem } from './EntryItem'
 import { observeSentinel } from '../lib/observers'
-import { checkTail, loadMore, reader } from '../lib/state'
+import { useReader } from '../lib/reader-context'
 
 /**
  * The display window + end sentinel. The sentinel pages the keyset window; once
@@ -11,19 +11,21 @@ import { checkTail, loadMore, reader } from '../lib/state'
  * container (as the old EntryList did).
  */
 export const EntryList = () => {
+  const r = useReader()
+  const { checkTail, loadMore } = r
   // A fetch can be in flight when the sentinel reports again; the store guards
   // both paths with `loadingMore`.
-  const onSentinel = (): Promise<void> => (reader.nextCursor ? loadMore() : checkTail())
+  const onSentinel = (): Promise<void> => (r.nextCursor() ? loadMore() : checkTail())
 
   return (
     <div data-testid="entry-list" class="flex flex-col gap-y-1 pb-[100dvh]">
-      <Show when={reader.entries.length === 0}>
+      <Show when={r.entries().length === 0}>
         <p class="text-gray-500 text-sm px-2 py-4">No entries.</p>
       </Show>
-      <For each={reader.entries}>{(entry) => <EntryItem entry={entry} />}</For>
+      <For each={r.entries()}>{(entry) => <EntryItem entry={entry} />}</For>
       <div
         id="entry-sentinel"
-        class={['h-1 w-full', { hidden: reader.loadingMore }]}
+        class={['h-1 w-full', { hidden: r.session.loadingMore }]}
         ref={(element) => observeSentinel(element, onSentinel)}
       />
     </div>

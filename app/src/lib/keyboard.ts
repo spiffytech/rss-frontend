@@ -5,13 +5,16 @@
  *
  * Returns a cleanup function; call it from `onCleanup` inside `onMount`.
  */
-import { reader, markDisplayed, moveAndRead, toggleRead, toggleStar } from './state'
 import type { EntryId } from '../shared/ids'
+import type { Reader } from './reader'
 
-export const attachKeyboard = (onToggleViewMode: () => void): (() => void) => {
+export const attachKeyboard = (
+  r: Reader,
+  onToggleViewMode: () => void,
+): (() => void) => {
   const currentEntry = (): { id: EntryId } | null => {
-    if (!reader.currentId) return null
-    return reader.entries.find((entry) => entry.id === reader.currentId) ?? null
+    if (!r.session.currentId) return null
+    return r.entries().find((entry) => entry.id === r.session.currentId) ?? null
   }
 
   const onKeydown = (event: KeyboardEvent) => {
@@ -21,21 +24,21 @@ export const attachKeyboard = (onToggleViewMode: () => void): (() => void) => {
 
     if (event.key === 'j' || event.key === 'ArrowDown') {
       event.preventDefault()
-      moveAndRead(1)
+      r.moveAndRead(1)
     } else if (event.key === 'k' || event.key === 'ArrowUp') {
       event.preventDefault()
-      moveAndRead(-1)
+      r.moveAndRead(-1)
     } else if (event.key === 'm') {
       const current = currentEntry()
-      if (current) toggleRead(current.id)
+      if (current) r.toggleRead(current.id)
     } else if (event.key === 's') {
       const current = currentEntry()
-      if (current) void toggleStar(current.id)
+      if (current) void r.toggleStar(current.id)
     } else if (event.key === 'v') {
       onToggleViewMode()
     } else if (event.key === 'A' && event.shiftKey) {
       event.preventDefault()
-      markDisplayed()
+      r.markDisplayed()
     }
   }
 

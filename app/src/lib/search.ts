@@ -5,18 +5,18 @@
  */
 import { createEffect, createSignal, untrack } from 'solid-js'
 
-import { reader, reloadEntries, setFilter } from './state'
+import type { Reader } from './reader'
 
 const DEBOUNCE_MS = 300
 
-export const createSearch = () => {
+export const createSearch = (r: Reader, onSearch: (term: string | undefined) => void) => {
   // Initial value only — the effect below keeps it in step with the filter.
-  const [text, setText] = createSignal(untrack(() => reader.filter.search ?? ''))
+  const [text, setText] = createSignal(untrack(() => r.data.filter.search ?? ''))
   let timer: ReturnType<typeof setTimeout> | undefined
 
   // Navigating to another view clears the filter's search — the box clears with it.
   createEffect(
-    () => reader.filter.search,
+    () => r.data.filter.search,
     (search) => {
       clearTimeout(timer)
       setText(search ?? '')
@@ -28,10 +28,8 @@ export const createSearch = () => {
     setText(value)
     clearTimeout(timer)
     timer = setTimeout(() => {
-      setFilter({ ...reader.filter, search: value || undefined })
-      // Entries + counters only — not the full bootstrap (prefs/panel refetch)
-      // which the debounce would otherwise fire on every search keystroke.
-      void reloadEntries(reader.filter)
+      // The URL is the search state; the projection re-runs off it.
+      onSearch(value || undefined)
     }, DEBOUNCE_MS)
   }
 
@@ -39,8 +37,7 @@ export const createSearch = () => {
   const clearSearch = (): void => {
     clearTimeout(timer)
     setText('')
-    setFilter({ ...reader.filter, search: undefined })
-    void reloadEntries(reader.filter)
+    onSearch(undefined)
   }
 
   return { text, onSearchInput, clearSearch }

@@ -6,14 +6,7 @@ import type { FeedInfo } from '../shared/types'
 import { DEFAULT_HIDE_EMPTY_FEEDS } from '../shared/prefs'
 import { compareTitlesCI } from '../shared/util'
 import { autofocus } from '../lib/observers'
-import {
-  cancelRename,
-  reader,
-  reloadEntries,
-  saveRename,
-  setReader,
-  startRename,
-} from '../lib/state'
+import { useReader } from '../lib/reader-context'
 import { FeedIcon } from './FeedIcon'
 
 /**
@@ -26,13 +19,15 @@ import { FeedIcon } from './FeedIcon'
  * since the list windowed.
  */
 export const FeedPanel = () => {
+  const r = useReader()
+  const { cancelRename, refreshPanel, saveRename, startRename } = r
   const navigate = useNavigate()
 
   // Case-insensitive order inside each folder (the server hands them over in
   // SQLite's binary collation order, which puts every capital letter first).
   const feedsByCategory = createMemo(() => {
     const map = new Map<string, FeedInfo[]>()
-    const sorted = [...reader.panel.feeds].sort((a, b) => compareTitlesCI(a.title, b.title))
+    const sorted = [...r.data.feeds].sort((a, b) => compareTitlesCI(a.title, b.title))
     for (const feed of sorted) {
       const list = map.get(feed.categoryId) ?? []
       list.push(feed)
@@ -42,7 +37,7 @@ export const FeedPanel = () => {
   })
 
   const sortedCategories = createMemo(() =>
-    [...reader.panel.categories].sort((a, b) => compareTitlesCI(a.title, b.title)),
+    [...r.data.categories].sort((a, b) => compareTitlesCI(a.title, b.title)),
   )
 
   /** Identity-only nav URL (which feed/category/section). */
@@ -55,18 +50,18 @@ export const FeedPanel = () => {
     return queryString ? `/?${queryString}` : '/'
   }
 
-  const isActiveFeed = (feedId: string) => reader.filter.feedId === feedId
+  const isActiveFeed = (feedId: string) => r.data.filter.feedId === feedId
   const isRenamingFeed = (feedId: string) =>
-    reader.renameId === feedId && reader.renameKind === 'feed'
+    r.session.renameId === feedId && r.session.renameKind === 'feed'
   const isRenamingCategory = (categoryId: string) =>
-    reader.renameId === categoryId && reader.renameKind === 'category'
+    r.session.renameId === categoryId && r.session.renameKind === 'category'
 
-  const hideEmptyFeeds = () => reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS
+  const hideEmptyFeeds = () => r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS
 
   const showCategory = (catFeeds: FeedInfo[]): boolean => {
     if (!hideEmptyFeeds()) return true
-    const hasUnread = catFeeds.some((feed) => (reader.panel.counters[feed.id] ?? 0) > 0)
-    const hasActive = catFeeds.some((feed) => reader.filter.feedId === feed.id)
+    const hasUnread = catFeeds.some((feed) => (r.counterFor(feed.id)) > 0)
+    const hasActive = catFeeds.some((feed) => r.data.filter.feedId === feed.id)
     return hasUnread || hasActive
   }
 
@@ -81,8 +76,8 @@ export const FeedPanel = () => {
         type="text"
         ref={autofocus}
         class="w-full p-0.5 border border-gray-300 rounded text-sm"
-        value={reader.renameTitle}
-        onInput={(event) => setReader((state) => { state.renameTitle = event.currentTarget.value })}
+        value={r.session.renameTitle}
+        onInput={(event) => r.setSession((state) => { r.session.renameTitle = event.currentTarget.value })}
         onKeyDown={onRenameKeydown}
       />
       <div class="flex items-center justify-end gap-1">
@@ -117,7 +112,7 @@ export const FeedPanel = () => {
               href={link({ starred: 1 })}
               class={[
                 'w-full text-left px-2 py-1 rounded hover:bg-gray-100 flex justify-between items-center',
-                { 'bg-gray-100': reader.filter.starred === true },
+                { 'bg-gray-100': r.data.filter.starred === true },
               ]}
             >
               <span>Starred</span>
@@ -177,7 +172,7 @@ export const FeedPanel = () => {
                             {
                               hidden:
                                 hideEmptyFeeds() &&
-                                (reader.panel.counters[feed.id] ?? 0) === 0 &&
+                                (r.counterFor(feed.id)) === 0 &&
                                 !isActiveFeed(feed.id),
                             },
                           ]}
@@ -194,7 +189,7 @@ export const FeedPanel = () => {
                                 ]}
                                 onClick={(event) => {
                                   event.preventDefault()
-                                  if (isActiveFeed(feed.id)) void reloadEntries(reader.filter)
+                                  if (isActiveFeed(feed.id)) refreshPanel()
                                   else void navigate(link({ feed: feed.id }))
                                 }}
                               >
@@ -211,7 +206,7 @@ export const FeedPanel = () => {
                             <Show when={feed.parsingErrorCount > 0}>
                               <span title="Fetch errors">⚠️</span>
                             </Show>
-                            <Show when={reader.feedPrefs[feed.id]?.favorite === true}>
+                            <Show when={r.data.feedPrefs[feed.id]?.favorite === true}>
                               <span
                                 data-testid="feed-favorite"
                                 title="On the home page"
@@ -224,7 +219,7 @@ export const FeedPanel = () => {
                               data-testid="feed-count"
                               class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0"
                             >
-                              {reader.panel.counters[feed.id] ?? 0}
+                              {r.counterFor(feed.id)}
                             </span>
                             <button
                               type="button"

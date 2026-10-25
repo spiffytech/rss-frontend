@@ -1,7 +1,7 @@
 import { Show } from 'solid-js'
 
 import type { FeedId } from '../shared/ids'
-import { markIconFailed, reader } from '../lib/state'
+import { useReader } from '../lib/reader-context'
 
 /**
  * The feed's icon, with a letter fallback when the <img> errors.
@@ -10,7 +10,9 @@ import { markIconFailed, reader } from '../lib/state'
  * is an <img src>, and an <img> cannot speak the RPC protocol.
  */
 export const FeedIcon = (props: { feedId: FeedId; title: string }) => {
-  const failed = () => reader.iconFailed[props.feedId] === true
+  const r = useReader()
+  const { markIconFailed } = r
+  const failed = () => r.session.iconFailed[props.feedId] === true
 
   return (
     <span class="inline-flex items-center self-center shrink-0 relative w-5 h-5" aria-hidden="true">

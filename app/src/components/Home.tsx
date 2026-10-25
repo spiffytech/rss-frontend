@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 
-import { favoriteFeeds, favoriteFeedsWithUnread, reader } from "../lib/state";
+import { useReader } from '../lib/reader-context'
 import { FeedIcon } from "./FeedIcon";
 
 /**
@@ -14,6 +14,8 @@ import { FeedIcon } from "./FeedIcon";
  * category, unchanged.
  */
 export const Home = () => {
+  const r = useReader()
+  const { favoriteFeeds, favoriteFeedsWithUnread } = r
   const unread = () => favoriteFeedsWithUnread();
   const anyFavorites = () => favoriteFeeds().length > 0;
 
@@ -58,7 +60,7 @@ export const Home = () => {
                       data-testid="home-favorite-count"
                       class="shrink-0 text-xs text-gray-500 tabular-nums"
                     >
-                      {reader.panel.counters[feed.id] ?? 0}
+                      {r.counterFor(feed.id)}
                     </span>
                   </span>
                 </a>
