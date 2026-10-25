@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onSettled } from 'solid-js'
+import { Show, createEffect, createMemo, createSignal, onSettled, untrack } from 'solid-js'
 import { useLocation } from '@solidjs/router'
 
 import { parseFilterFromUrl } from '../shared/filter'
@@ -8,6 +8,7 @@ import { scrollToEntry } from '../lib/nav'
 import {
   effectiveViewMode,
   loadBootstrap,
+  loadNavigation,
   reader,
   reloadEntries,
   setFilter,
@@ -16,6 +17,7 @@ import {
   startIdleRefresh,
 } from '../lib/state'
 import { FeedPanel } from '../components/FeedPanel'
+import { Home } from '../components/Home'
 import { EntryList } from '../components/EntryList'
 import { TopToolbar } from '../components/TopToolbar'
 
@@ -46,9 +48,21 @@ export const ReaderPage = () => {
   const [isDesktop, setIsDesktop] = createSignal(false)
   const [sidebarOpen, setSidebarOpen] = createSignal(false)
 
+  /** Does the URL name a view (feed, category, section, search)? If not, we are
+   *  on the home page. */
+  const hasView = (): boolean => {
+    const filter = filterFromUrl()
+    return Boolean(
+      filter.feedId || filter.categoryId || filter.starred || filter.search,
+    )
+  }
+
   let scrollEl: HTMLDivElement | undefined
 
-  const initialFilter = filterFromUrl()
+  // Captured once on purpose: the live filter is read inside the navigation
+  // effect below. untrack says so, and keeps Solid from warning about a
+  // component-body read that is never meant to re-run.
+  const initialFilter = untrack(filterFromUrl)
   let lastFilter: EntriesFilter = initialFilter
 
   // First paint and teardown. `onSettled` is Solid 2's onMount: it runs after
@@ -61,7 +75,13 @@ export const ReaderPage = () => {
     onChange()
     mql.addEventListener('change', onChange)
 
-    void loadBootstrap(initialFilter)
+    // Home = the sidebar and its favorites; a view = a window of entries. Only
+    // one of them is fetched on landing.
+    if (initialFilter.feedId || initialFilter.categoryId || initialFilter.starred || initialFilter.search) {
+      void loadBootstrap(initialFilter)
+    } else {
+      void loadNavigation()
+    }
     const stopKeys = attachKeyboard(() => {
       setViewMode(effectiveViewMode() === 'expanded' ? 'list' : 'expanded')
     })
@@ -85,18 +105,24 @@ export const ReaderPage = () => {
 
   // Nav link in the drawer: close the drawer, reload only when the identity
   // filter actually changed (old route-watcher behavior).
+  //
+  // The compute phase reads the URL and decides whether anything changed; the
+  // apply phase only acts on that verdict. Reading the URL again inside the
+  // apply phase would be an untracked read (Solid warns, correctly).
   createEffect(
-    () => identityKey(filterFromUrl()),
     () => {
       const next = filterFromUrl()
-      if (identityKey(next) === identityKey(lastFilter)) {
-        setSidebarOpen(false)
-        return
-      }
-      lastFilter = next
+      const unchanged = identityKey(next) === identityKey(lastFilter)
+      return unchanged ? null : next
+    },
+    (next) => {
       setSidebarOpen(false)
+      if (next === null) return
+      lastFilter = next
       setFilter(next)
-      void reloadEntries(next)
+      const namesAView = Boolean(next.feedId || next.categoryId || next.starred || next.search)
+      if (namesAView) void reloadEntries(next)
+      else void loadNavigation()
     },
   )
 
@@ -197,7 +223,10 @@ export const ReaderPage = () => {
 
   return (
     <div class="grid grid-rows-[auto_1fr] app-container flex-1 min-h-0">
-      <TopToolbar onToggleSidebar={() => setSidebarOpen(!sidebarOpen())} />
+      <TopToolbar
+        onToggleSidebar={() => setSidebarOpen(!sidebarOpen())}
+        reading={hasView()}
+      />
 
       <div class="relative grid grid-cols-1 md:grid-cols-[var(--sidebar-w)_1fr] gap-x-3 min-h-0 overflow-hidden">
         {/* Sidebar: static column on md+, off-canvas drawer on mobile toggled by
@@ -246,7 +275,12 @@ export const ReaderPage = () => {
           data-testid="entry-scroll"
           onScroll={onListScroll}
         >
-          <EntryList />
+          {/* No identity filter means no view: the home page is a set of links,
+              not a list of entries. Everything below it in this component only
+              makes sense once a feed, category, section or search is chosen. */}
+          <Show when={hasView()} fallback={<Home />}>
+            <EntryList />
+          </Show>
         </div>
       </div>
     </div>

@@ -1,15 +1,16 @@
-import { Show, createMemo, createSignal, onSettled } from 'solid-js'
-import { useNavigate } from '@solidjs/router'
+import { Show, createMemo, createSignal, onSettled } from "solid-js";
+import { useNavigate } from "@solidjs/router";
 
-import type { FeedId } from '../shared/ids'
-import { computePopoverPlacement } from '../shared/popover'
-import { DEFAULT_HIDE_EMPTY_FEEDS } from '../shared/prefs'
-import { autofocus } from '../lib/observers'
-import { createSearch } from '../lib/search'
-import * as api from '../server/actions'
+import type { FeedId } from "../shared/ids";
+import { computePopoverPlacement } from "../shared/popover";
+import { DEFAULT_HIDE_EMPTY_FEEDS } from "../shared/prefs";
+import { autofocus } from "../lib/observers";
+import { createSearch } from "../lib/search";
+import * as api from "../server/actions";
 import {
   currentTitle,
   effectiveViewMode,
+  isFavorite,
   markDisplayed,
   reader,
   refreshFeeds,
@@ -18,12 +19,13 @@ import {
   setSort,
   setViewMode,
   toggleAutoRead,
+  toggleFavorite,
   toggleHideEmptyFeeds,
   unreadCount,
   unsubscribe,
-} from '../lib/state'
+} from "../lib/state";
 
-const PANEL_ID = 'feed-menu'
+const PANEL_ID = "feed-menu";
 
 /**
  * The toolbar's "where am I" label turned into a menu: the current feed's name
@@ -44,86 +46,86 @@ export const FeedMenu = () => {
   // A setting in its affirmative state (enabled, hidden) carries the accent
   // fill. This follows the row's own value, not the underlying boolean: blue on
   // "Auto-read: disabling" would read as a contradiction.
-  const TOGGLE_ON = 'bg-accent/15 hover:bg-accent/20 active:bg-accent/25'
+  const TOGGLE_ON = "bg-accent/15 hover:bg-accent/20 active:bg-accent/25";
 
-  const navigate = useNavigate()
-  const search = createSearch()
+  const navigate = useNavigate();
+  const search = createSearch();
 
-  let triggerEl: HTMLButtonElement | undefined
-  let panelEl: HTMLDialogElement | undefined
-  const [open, setOpen] = createSignal(false)
+  let triggerEl: HTMLButtonElement | undefined;
+  let panelEl: HTMLDialogElement | undefined;
+  const [open, setOpen] = createSignal(false);
 
-  const feedId = () => reader.filter.feedId
+  const feedId = () => reader.filter.feedId;
   // Rename/unsubscribe/sort/auto-read only mean something for one feed — Latest,
   // Starred and category views are aggregates.
-  const isFeedView = () => feedId() != null && feedId() !== ''
-  const searchActive = () => Boolean(reader.filter.search)
+  const isFeedView = () => feedId() != null && feedId() !== "";
+  const searchActive = () => Boolean(reader.filter.search);
   const autoReadOff = () =>
-    (reader.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId)
+    (reader.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
 
-  const [renameOpen, setRenameOpen] = createSignal(false)
-  const [renameTitle, setRenameTitle] = createSignal('')
+  const [renameOpen, setRenameOpen] = createSignal(false);
+  const [renameTitle, setRenameTitle] = createSignal("");
 
-  const title = createMemo(() => currentTitle())
-  const unread = createMemo(() => unreadCount())
-  const viewMode = createMemo(() => effectiveViewMode())
+  const title = createMemo(() => currentTitle());
+  const unread = createMemo(() => unreadCount());
+  const viewMode = createMemo(() => effectiveViewMode());
 
-  const isDesktop = () => matchMedia('(min-width: 48rem)').matches
+  const isDesktop = () => matchMedia("(min-width: 48rem)").matches;
 
   // ---- Placement ----
 
   /** Size and place the panel from the trigger's current rect. */
   const place = (): void => {
-    if (!triggerEl || !panelEl) return
+    if (!triggerEl || !panelEl) return;
     const { top, left, width, maxHeight } = computePopoverPlacement({
       rect: triggerEl.getBoundingClientRect(),
       viewportWidth: window.visualViewport?.width ?? window.innerWidth,
       viewportHeight: window.visualViewport?.height ?? window.innerHeight,
       isDesktop: isDesktop(),
-    })
-    panelEl.style.top = `${top}px`
-    panelEl.style.left = `${left}px`
-    panelEl.style.width = `${width}px`
-    panelEl.style.maxHeight = `${maxHeight}px`
-  }
+    });
+    panelEl.style.top = `${top}px`;
+    panelEl.style.left = `${left}px`;
+    panelEl.style.width = `${width}px`;
+    panelEl.style.maxHeight = `${maxHeight}px`;
+  };
 
   // A window resize moves the trigger, but so can a layout change with no resize
   // — typing in the search box adds the 🔍 chip to the trigger. The observer
   // covers both, so the panel can't end up stranded behind the toolbar.
-  let triggerObserver: ResizeObserver | null = null
+  let triggerObserver: ResizeObserver | null = null;
 
   const watchTrigger = (): void => {
-    window.addEventListener('resize', place)
-    if (typeof ResizeObserver !== 'undefined' && triggerEl) {
-      triggerObserver = new ResizeObserver(place)
-      triggerObserver.observe(triggerEl)
+    window.addEventListener("resize", place);
+    if (typeof ResizeObserver !== "undefined" && triggerEl) {
+      triggerObserver = new ResizeObserver(place);
+      triggerObserver.observe(triggerEl);
     }
-  }
+  };
 
   const unwatchTrigger = (): void => {
-    window.removeEventListener('resize', place)
-    triggerObserver?.disconnect()
-    triggerObserver = null
-  }
+    window.removeEventListener("resize", place);
+    triggerObserver?.disconnect();
+    triggerObserver = null;
+  };
 
   // Browser-only: onCleanup would also run when the server disposes its render
   // owner, where there is no window to unwatch.
-  onSettled(() => unwatchTrigger)
+  onSettled(() => unwatchTrigger);
 
   const openPanel = (): void => {
-    if (!panelEl || panelEl.open) return
-    place()
-    panelEl.showModal()
-    setOpen(true)
-    watchTrigger()
-  }
+    if (!panelEl || panelEl.open) return;
+    place();
+    panelEl.showModal();
+    setOpen(true);
+    watchTrigger();
+  };
 
   /** Also fires for Escape, so this is the single teardown point. */
   const onClose = (): void => {
-    setOpen(false)
-    unwatchTrigger()
-    setRenameOpen(false)
-  }
+    setOpen(false);
+    unwatchTrigger();
+    setRenameOpen(false);
+  };
 
   /**
    * A click whose target is the dialog itself landed on the backdrop — the
@@ -132,96 +134,99 @@ export const FeedMenu = () => {
    * takes a tap.
    */
   const onPanelClick = (event: MouseEvent): void => {
-    if (event.target === panelEl) closePanel()
-  }
+    if (event.target === panelEl) closePanel();
+  };
 
   const closePanel = (): void => {
-    if (panelEl?.open) panelEl.close()
-  }
+    if (panelEl?.open) panelEl.close();
+  };
 
   /** Every row dismisses the panel, so the action runner owns that. */
   const runAndClose = async (work: () => Promise<unknown> | unknown): Promise<void> => {
     try {
-      await work()
+      await work();
     } finally {
-      closePanel()
+      closePanel();
     }
-  }
+  };
 
   // ---- Actions ----
 
   const onMarkAllRead = (): void => {
-    markDisplayed()
-    closePanel()
-  }
+    markDisplayed();
+    closePanel();
+  };
 
-  const onRefresh = () => runAndClose(() => refreshFeeds())
+  const onRefresh = () => runAndClose(() => refreshFeeds());
   const onViewMode = () =>
-    runAndClose(() => setViewMode(effectiveViewMode() === 'expanded' ? 'list' : 'expanded'))
+    runAndClose(() => setViewMode(effectiveViewMode() === "expanded" ? "list" : "expanded"));
   const onSort = () =>
-    runAndClose(() => setSort((reader.filter.sort ?? 'oldest') === 'newest' ? 'oldest' : 'newest'))
-  const onToggleAutoRead = () => runAndClose(() => toggleAutoRead(feedId() as FeedId))
-  const onHideEmptyFeeds = () => runAndClose(() => toggleHideEmptyFeeds())
+    runAndClose(() => setSort((reader.filter.sort ?? "oldest") === "newest" ? "oldest" : "newest"));
+  const onToggleAutoRead = () => runAndClose(() => toggleAutoRead(feedId() as FeedId));
+  const onHideEmptyFeeds = () => runAndClose(() => toggleHideEmptyFeeds());
   const onHideReadItems = () =>
-    runAndClose(() => setHideReadItems(!(reader.filter.hideReadItems ?? true)))
-  const onClearSearch = () => runAndClose(() => search.clearSearch())
+    runAndClose(() => setHideReadItems(!(reader.filter.hideReadItems ?? true)));
+  const onClearSearch = () => runAndClose(() => search.clearSearch());
 
   const startRenameEditor = (): void => {
-    setRenameTitle(currentTitle())
-    setRenameOpen(true)
-  }
+    setRenameTitle(currentTitle());
+    setRenameOpen(true);
+  };
 
   const cancelRenameEditor = (): void => {
-    setRenameOpen(false)
-    setRenameTitle('')
-  }
+    setRenameOpen(false);
+    setRenameTitle("");
+  };
 
   const saveRenameEditor = async (): Promise<void> => {
-    const id = feedId()
-    const next = renameTitle().trim()
-    if (id == null || id === '' || !next) return
-    await api.renameFeed(id as FeedId, next)
+    const id = feedId();
+    const next = renameTitle().trim();
+    if (id == null || id === "" || !next) return;
+    await api.renameFeed(id as FeedId, next);
     // Through the shared snapshot helper: keeps the active feed in the sidebar
     // and refreshes the title cache the header falls back to.
-    await refreshPanel()
-    setRenameOpen(false)
-    closePanel()
-  }
+    await refreshPanel();
+    setRenameOpen(false);
+    closePanel();
+  };
 
   const onRenameKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape') return
+    if (event.key !== "Escape") return;
     // Escape is also the dialog's dismiss key. Claim it while the rename field is
     // what's being escaped; if a browser still closes the panel, the close
     // handler cancels the rename anyway, so the worst case is a coarser escape.
-    event.preventDefault()
-    event.stopPropagation()
-    cancelRenameEditor()
-  }
+    event.preventDefault();
+    event.stopPropagation();
+    cancelRenameEditor();
+  };
+
+  const onToggleFavorite = (): Promise<void> =>
+    runAndClose(() => toggleFavorite(feedId() as FeedId));
 
   const onUnsubscribe = async (): Promise<void> => {
-    const id = feedId()
-    if (id == null || id === '') return
-    if (!confirm('Unsubscribe from this feed?')) return
-    await unsubscribe(id as FeedId)
-    closePanel()
-    await navigate('/')
-  }
+    const id = feedId();
+    if (id == null || id === "") return;
+    if (!confirm("Unsubscribe from this feed?")) return;
+    await unsubscribe(id as FeedId);
+    closePanel();
+    await navigate("/");
+  };
 
   const onLogout = async (): Promise<void> => {
-    await api.logout()
-    closePanel()
-    await navigate('/login')
-  }
+    await api.logout();
+    closePanel();
+    await navigate("/login");
+  };
 
   return (
     <div class="min-w-0 flex-1 md:flex-none md:mr-auto">
       <button
         ref={(element) => {
-          triggerEl = element
+          triggerEl = element;
         }}
         type="button"
         aria-haspopup="dialog"
-        aria-expanded={open() ? 'true' : 'false'}
+        aria-expanded={open() ? "true" : "false"}
         aria-controls={PANEL_ID}
         data-testid="feed-menu-trigger"
         class="w-full md:w-auto min-h-11 min-w-0 flex items-center gap-x-2 px-3 py-2 border border-line rounded-lg bg-white hover:bg-surface active:bg-line leading-none text-left"
@@ -237,10 +242,7 @@ export const FeedMenu = () => {
           </span>
         </Show>
         <Show when={searchActive()}>
-          <span
-            class="shrink-0 max-w-24 truncate text-xs text-muted"
-            title={reader.filter.search}
-          >
+          <span class="shrink-0 max-w-24 truncate text-xs text-muted" title={reader.filter.search}>
             &#128269; {reader.filter.search}
           </span>
         </Show>
@@ -252,7 +254,7 @@ export const FeedMenu = () => {
       <dialog
         id={PANEL_ID}
         ref={(element) => {
-          panelEl = element
+          panelEl = element;
         }}
         aria-label="Feed actions and settings"
         class="inset-auto m-0 max-w-none max-h-none bg-white border border-line rounded-xl shadow-xl text-sm overflow-y-auto overscroll-contain backdrop:bg-black/40"
@@ -304,44 +306,48 @@ export const FeedMenu = () => {
                 </button>
                 <Show when={isFeedView() && !searchActive()}>
                   <button type="button" class="menu-row" onClick={onSort}>
-                    Sort:{' '}
-                    {(reader.filter.sort ?? 'oldest') === 'oldest' ? 'oldest first' : 'newest first'}
+                    Sort:{" "}
+                    {(reader.filter.sort ?? "oldest") === "oldest"
+                      ? "oldest first"
+                      : "newest first"}
                   </button>
                 </Show>
                 <Show when={isFeedView()}>
                   <button
                     type="button"
-                    class={['menu-row', { [TOGGLE_ON]: !autoReadOff() }]}
-                    aria-pressed={autoReadOff() ? 'true' : 'false'}
+                    class={["menu-row", { [TOGGLE_ON]: !autoReadOff() }]}
+                    aria-pressed={autoReadOff() ? "true" : "false"}
                     onClick={onToggleAutoRead}
                   >
-                    Auto-read: {autoReadOff() ? 'disabled' : 'enabled'}
+                    Auto-read: {autoReadOff() ? "disabled" : "enabled"}
                   </button>
                 </Show>
                 <button
                   type="button"
                   class={[
-                    'menu-row',
+                    "menu-row",
                     {
                       [TOGGLE_ON]: reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
                     },
                   ]}
                   aria-pressed={
-                    (reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? 'true' : 'false'
+                    (reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? "true" : "false"
                   }
                   onClick={onHideEmptyFeeds}
                 >
-                  Empty feeds:{' '}
-                  {(reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? 'hidden' : 'shown'}
+                  Empty feeds:{" "}
+                  {(reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
+                    ? "hidden"
+                    : "shown"}
                 </button>
                 <Show when={!searchActive()}>
                   <button
                     type="button"
-                    class={['menu-row', { [TOGGLE_ON]: reader.filter.hideReadItems ?? true }]}
-                    aria-pressed={(reader.filter.hideReadItems ?? true) ? 'true' : 'false'}
+                    class={["menu-row", { [TOGGLE_ON]: reader.filter.hideReadItems ?? true }]}
+                    aria-pressed={(reader.filter.hideReadItems ?? true) ? "true" : "false"}
                     onClick={onHideReadItems}
                   >
-                    Read items: {(reader.filter.hideReadItems ?? true) ? 'hidden' : 'shown'}
+                    Read items: {(reader.filter.hideReadItems ?? true) ? "hidden" : "shown"}
                   </button>
                 </Show>
               </div>
@@ -354,6 +360,14 @@ export const FeedMenu = () => {
                   Refresh feeds
                 </button>
                 <Show when={isFeedView()}>
+                  <button
+                    type="button"
+                    class="menu-row"
+                    data-testid="feed-menu-favorite"
+                    onClick={() => void onToggleFavorite()}
+                  >
+                    {isFavorite(feedId() as FeedId) ? "Unfavorite feed" : "Favorite feed"}
+                  </button>
                   <button type="button" class="menu-row" onClick={startRenameEditor}>
                     Rename feed…
                   </button>
@@ -375,8 +389,8 @@ export const FeedMenu = () => {
           <form
             class="p-3 flex flex-col gap-2"
             onSubmit={(event) => {
-              event.preventDefault()
-              void saveRenameEditor()
+              event.preventDefault();
+              void saveRenameEditor();
             }}
           >
             <label
@@ -413,7 +427,7 @@ export const FeedMenu = () => {
         </Show>
       </dialog>
     </div>
-  )
-}
+  );
+};
 
-export default FeedMenu
+export default FeedMenu;

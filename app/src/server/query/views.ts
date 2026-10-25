@@ -208,6 +208,10 @@ export function panel(
 
   return {
     feeds: visibleFeeds,
+    // Every feed, unfiltered. The sidebar uses `feeds` (empty ones hidden); the
+    // home page needs to resolve favorites by id even when they have nothing
+    // unread — a favorite is a bookmarked feed, not a queue.
+    allFeeds: feedRows.map(toFeedInfo),
     categories: categoryCounts,
     counters: counters as Record<FeedId, number>,
   }

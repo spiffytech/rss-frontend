@@ -4,7 +4,13 @@ import type { SQLQueryBindings } from 'bun:sqlite'
 import { openDatabase, type ReaderHandle } from '../src/server/db'
 import { categories } from '../src/server/db/schema'
 import { rebuildEntrySearch } from '../src/server/db/search-sync'
-import { markEntries, setStarred, setUserPrefs } from '../src/server/query/mutations'
+import {
+  getAllFeedPrefs,
+  markEntries,
+  setFeedPrefs,
+  setStarred,
+  setUserPrefs,
+} from '../src/server/query/mutations'
 import { getEntryContent, panel, queryView } from '../src/server/query/views'
 import { epochMs, newCategoryId, newEntryId, newFeedId, newUserId, type EntryId, type FeedId, type UserId } from '../src/shared/ids'
 import { resolveViewFilter } from '../src/shared/prefs'
@@ -169,6 +175,32 @@ test('user prefs round-trip and merge', () => {
   const p = panel(handle.db, { userId, hideEmptyFeeds: true })
   expect(p.feeds).toHaveLength(1)
   expect(p.feeds[0]!.id).not.toBe(feedB)
+})
+
+test('a favorite with nothing unread is still resolvable for the home page', () => {
+  const { handle, userId, feedB } = setup()
+  // Everything in feed B is read. The sidebar keeps hiding it (hideEmptyFeeds),
+  // but the home page resolves links from `allFeeds`, so the favorite survives.
+  markEntries(handle.db, {
+    userId,
+    entryIds: view(handle.db, { userId, filter: { feedId: feedB } }).map((r) => r.id),
+    status: 'read',
+  })
+  const snapshot = panel(handle.db, { userId, hideEmptyFeeds: true })
+  expect(snapshot.feeds.find((f) => f.id === feedB)).toBeUndefined()
+  expect(snapshot.allFeeds.find((f) => f.id === feedB)?.title).toBe('Feed B')
+  expect(snapshot.counters[feedB] ?? 0).toBe(0)
+})
+
+test('feed prefs round-trip, including the home-page favorite flag', () => {
+  const { handle, userId, feedB } = setup()
+  setFeedPrefs(handle.db, userId, feedB, { favorite: true })
+  // Merges with later patches rather than replacing them.
+  setFeedPrefs(handle.db, userId, feedB, { sort: 'newest' })
+  expect(getAllFeedPrefs(handle.db, userId)[feedB]).toMatchObject({ favorite: true, sort: 'newest' })
+  // Unfavoriting is a patch too, and the feed does not move category.
+  setFeedPrefs(handle.db, userId, feedB, { favorite: false })
+  expect(getAllFeedPrefs(handle.db, userId)[feedB]?.favorite).toBe(false)
 })
 
 test('view windows page by keyset: no skips, no repeats, even on timestamp ties', () => {

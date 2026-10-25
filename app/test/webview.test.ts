@@ -10,116 +10,127 @@
  * The fixture entry is hostile feed HTML: script, event handler, javascript:
  * URL, relative URL, and a YouTube iframe (must become <lite-youtube>).
  */
-import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { spawn } from 'node:child_process'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { afterAll, beforeAll, expect, test } from "bun:test";
+import { spawn } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { openDatabase } from '../src/server/db'
-import { epochMs, newCategoryId, newEntryId, newFeedId, newUserId } from '../src/shared/ids'
+import { openDatabase } from "../src/server/db";
+import { epochMs, newCategoryId, newEntryId, newFeedId, newUserId } from "../src/shared/ids";
 
-const enabled = process.env.WEBVIEW === '1'
-const PORT = 4820
-const BASE = `http://localhost:${PORT}`
+const enabled = process.env.WEBVIEW === "1";
+const PORT = 4820;
+const BASE = `http://localhost:${PORT}`;
 
 const HOSTILE_HTML = [
   '<p onclick="alert(1)">hello</p>',
-  '<script>alert(2)</script>',
+  "<script>alert(2)</script>",
   '<iframe src="https://www.youtube.com/watch?v=dQw4w9WgXcQ"></iframe>',
   '<a href="/relative">rel</a>',
   '<img src="javascript:alert(3)">',
   // xkcd's shape: the image title is the joke (Miniflux's add_image_title).
   '<img src="https://imgs.xkcd.com/comics/standards.png" title="Alt text: the comic joke">',
-].join('')
+].join("");
 
-let server: ReturnType<typeof spawn> | undefined
-let fixtureDbPath = ''
+let server: ReturnType<typeof spawn> | undefined;
+let fixtureDbPath = "";
 
 beforeAll(async () => {
-  if (!enabled) return
+  if (!enabled) return;
   // A server left behind by an interrupted run would silently serve *its*
   // database — the suite would read another run's state and fail in ways that
   // look like application bugs.
   const leftover = await fetch(`${BASE}/health`).then(
     (res) => res.ok,
     () => false,
-  )
-  if (leftover) throw new Error(`port ${PORT} is already serving — kill the leftover server first`)
-  const dbPath = join(mkdtempSync(join(tmpdir(), 'webview-db-')), 'reader.sqlite')
-  fixtureDbPath = dbPath
-  const handle = openDatabase(dbPath)
-  const now = epochMs(Date.now())
-  const userId = newUserId(now)
-  handle.sqlite.run('INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)', [
-    userId,
-    'spiffy',
-    Bun.password.hashSync('correct-horse', { algorithm: 'argon2id' }),
-    now,
-  ])
-  handle.sqlite.run('INSERT INTO categories (id, user_id, title, created_at) VALUES (?, ?, ?, ?)', [
+  );
+  if (leftover) throw new Error(`port ${PORT} is already serving — kill the leftover server first`);
+  const dbPath = join(mkdtempSync(join(tmpdir(), "webview-db-")), "reader.sqlite");
+  fixtureDbPath = dbPath;
+  const handle = openDatabase(dbPath);
+  const now = epochMs(Date.now());
+  const userId = newUserId(now);
+  handle.sqlite.run(
+    "INSERT INTO users (id, username, password_hash, created_at) VALUES (?, ?, ?, ?)",
+    [userId, "spiffy", Bun.password.hashSync("correct-horse", { algorithm: "argon2id" }), now],
+  );
+  handle.sqlite.run("INSERT INTO categories (id, user_id, title, created_at) VALUES (?, ?, ?, ?)", [
     newCategoryId(now),
     userId,
-    'Tech',
+    "Tech",
     now,
-  ])
-  const feedId = newFeedId(now)
+  ]);
+  const feedId = newFeedId(now);
   handle.sqlite.run(
-    'INSERT INTO feeds (id, user_id, category_id, title, feed_url, site_url, created_at) VALUES (?, ?, (SELECT id FROM categories), ?, ?, ?, ?)',
-    [feedId, userId, 'Blog', 'https://example.com/feed', 'https://example.com/', now],
-  )
+    "INSERT INTO feeds (id, user_id, category_id, title, feed_url, site_url, created_at) VALUES (?, ?, (SELECT id FROM categories), ?, ?, ?, ?)",
+    [feedId, userId, "Blog", "https://example.com/feed", "https://example.com/", now],
+  );
   // A hostile TITLE, not just hostile content: titles are rendered as text, so
   // nothing here may become markup or execute. (TITLE-XSS-MARKER locates it.)
-  const HOSTILE_TITLE = '<img src=x onerror="window.__titleXss=1"> TITLE-XSS-MARKER'
+  const HOSTILE_TITLE = '<img src=x onerror="window.__titleXss=1"> TITLE-XSS-MARKER';
   handle.sqlite.run(
     `INSERT INTO entries (id, user_id, feed_id, hash, title, url, content, published_at, created_at, changed_at)
      VALUES (?, ?, ?, 'h1', ?, 'https://xkcd.com/927/', ?, ?, ?, ?)`,
     [newEntryId(now), userId, feedId, HOSTILE_TITLE, HOSTILE_HTML, now, now, now],
-  )
+  );
   // A window's worth of plain rows (VIEW_PAGE_SIZE = 100) so the sentinel has a
   // second page to pull and auto-read has entries to scroll past.
   const insert = handle.sqlite.prepare(
     `INSERT INTO entries (id, user_id, feed_id, hash, title, content, published_at, created_at, changed_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  )
+  );
   for (let i = 1; i <= 119; i++) {
     // The entry at #50 carries a titled image on a NON-comic URL: the rewrite
     // must leave it alone (the rule keys off the entry's domain). #50 is inside
     // the first window whichever way the list is ordered.
-    const content = i === 50 ? '<p>body</p><img src="https://example.com/x.png" title="Not a comic">' : '<p>body</p>'
-    insert.run(newEntryId(now), userId, feedId, `plain-${i}`, `Plain ${i}`, content, now + i * 1000, now, now)
+    const content =
+      i === 50
+        ? '<p>body</p><img src="https://example.com/x.png" title="Not a comic">'
+        : "<p>body</p>";
+    insert.run(
+      newEntryId(now),
+      userId,
+      feedId,
+      `plain-${i}`,
+      `Plain ${i}`,
+      content,
+      now + i * 1000,
+      now,
+      now,
+    );
   }
-  handle.sqlite.run('UPDATE feeds SET parsing_error_count = 1 WHERE id = ?', [feedId])
-  handle.sqlite.close()
+  handle.sqlite.run("UPDATE feeds SET parsing_error_count = 1 WHERE id = ?", [feedId]);
+  handle.sqlite.close();
 
-  server = spawn('bun', ['server.ts'], {
+  server = spawn("bun", ["server.ts"], {
     env: {
       ...process.env,
       READER_DB_PATH: dbPath,
       PORT: String(PORT),
-      SESSION_SECRET: 'webview-smoke',
-      NODE_ENV: 'production',
-      SCHEDULER_ENABLED: '0',
+      SESSION_SECRET: "webview-smoke",
+      NODE_ENV: "production",
+      SCHEDULER_ENABLED: "0",
     },
-    stdio: 'ignore',
-  })
+    stdio: "ignore",
+  });
   for (let i = 0; i < 50; i++) {
     try {
-      const res = await fetch(`${BASE}/health`)
-      if (res.ok) break
+      const res = await fetch(`${BASE}/health`);
+      if (res.ok) break;
     } catch {
       /* not up yet */
     }
-    await new Promise((r) => setTimeout(r, 100))
+    await new Promise((r) => setTimeout(r, 100));
   }
-})
+});
 
 afterAll(() => {
-  if (typeof Bun !== 'undefined' && 'WebView' in Bun) Bun.WebView.closeAll()
-  server?.kill()
-})
+  if (typeof Bun !== "undefined" && "WebView" in Bun) Bun.WebView.closeAll();
+  server?.kill();
+});
 
-const it = enabled ? test : test.skip
+const it = enabled ? test : test.skip;
 
 /** Poll a page-side expression until it is truthy (or the deadline passes). */
 const until = (script: string, timeoutMs = 15_000): string => `
@@ -135,7 +146,7 @@ const until = (script: string, timeoutMs = 15_000): string => `
       tick()
     })
   })()
-`
+`;
 
 /**
  * Signs the fixture account in through the real login form.
@@ -146,8 +157,34 @@ const until = (script: string, timeoutMs = 15_000): string => `
  * input (a programmatic `.value =` does not reach Solid's handler) is both more
  * faithful and immune to that protocol changing.
  */
+/** The fixture's only feed, read from the database so the URL is stable even
+ *  when the sidebar hides it (hideEmptyFeeds, everything read). */
+const fixtureFeedId = (): string => {
+  const handle = openDatabase(fixtureDbPath);
+  const row = handle.sqlite.query("SELECT id FROM feeds LIMIT 1").get() as { id: string };
+  handle.sqlite.close();
+  return row.id;
+};
+
+/** Everything unread again — tests share one database, and a reading-surface
+ *  test needs rows to read. */
+const restoreUnread = (): void => {
+  const handle = openDatabase(fixtureDbPath);
+  handle.sqlite.run("UPDATE entries SET status = 'unread'");
+  handle.sqlite.close();
+};
+
+/** Open a feed's reading view. Replaces `navigate("/")`, which is now the home
+ *  page (links, not entries). */
+const openFeedView = async (view: Bun.WebView, feedId = fixtureFeedId()): Promise<void> => {
+  await view.navigate(`${BASE}/?feed=${feedId}`);
+  await view.evaluate(
+    until('const n = document.querySelectorAll("[data-entry-id]").length; return n > 0 ? n : 0'),
+  );
+};
+
 const signIn = async (view: Bun.WebView): Promise<void> => {
-  await view.navigate(`${BASE}/login`)
+  await view.navigate(`${BASE}/login`);
 
   // Chrome is spawned once per process and keeps its cookie store, so a later
   // test's fresh WebView may already be signed in — in which case /login
@@ -165,15 +202,15 @@ const signIn = async (view: Bun.WebView): Promise<void> => {
         tick()
       })
     })()
-  `)
-  if (landed === 'reader') return
-  if (landed !== 'login') throw new Error(`login page did not render (got ${landed})`)
+  `);
+  if (landed === "reader") return;
+  if (landed !== "login") throw new Error(`login page did not render (got ${landed})`);
 
-  await view.click('input[name="username"]')
-  await view.type('spiffy')
-  await view.click('input[name="password"]')
-  await view.type('correct-horse')
-  await view.click('button[type="submit"]')
+  await view.click('input[name="username"]');
+  await view.type("spiffy");
+  await view.click('input[name="password"]');
+  await view.type("correct-horse");
+  await view.click('button[type="submit"]');
 
   // The reader shell mounts after the login RPC resolves and the router lands on /.
   const ready = await view.evaluate(`
@@ -190,17 +227,15 @@ const signIn = async (view: Bun.WebView): Promise<void> => {
         tick()
       })
     })()
-  `)
-  if (!ready) throw new Error('reader did not render after sign-in')
-}
+  `);
+  if (!ready) throw new Error("reader did not render after sign-in");
+};
 
-it(
-  'display pipeline sanitizes hostile HTML in a real browser',
-  async () => {
-  const view = new Bun.WebView({ width: 1100, height: 800 })
+it("display pipeline sanitizes hostile HTML in a real browser", async () => {
+  const view = new Bun.WebView({ width: 1100, height: 800 });
   try {
-    await signIn(view)
-    await view.navigate(`${BASE}/`)
+    await signIn(view);
+    await openFeedView(view);
     // Wait for the entry card to fetch and sink its body.
     await view.evaluate(`
       (() => {
@@ -214,7 +249,7 @@ it(
           tick()
         })
       })()
-    `)
+    `);
 
     const report = (await view.evaluate(`
       (() => {
@@ -326,47 +361,63 @@ it(
         }
       })()
     `)) as {
-      sink: string
-      probe: Record<string, string>
-      contentHtml: string | null
-      sinkFallback: boolean
-      sinkError: string | null
-      path: string
-      articles: number
-      mainText: string
-      diag: unknown
-      sidebarPanel: boolean
-      sections: boolean
-      hasLatest: boolean
-      hasStarred: boolean
-      hasBrand: boolean
-      feedMenu: boolean
-      bodyOverflow: string
-      documentScrolls: boolean
-      listScrolls: boolean
-      hasScript: boolean
-      hasOnclick: boolean
-      hasJsUrl: boolean
-      imgLoading: string | null
-      hasLiteYoutube: boolean
-      liteVideoId: string | null
-      liteDefined: boolean
-      liteUpgraded: boolean
-      liteStyled: boolean
-      comicCaption: string | null
-      comicImgTitle: string | null
-      titleText: string | null
-      titleImg: boolean
-      titleXss: boolean
-      linkHref: string | null
-      warnEmoji: boolean
-      warnBare: boolean
-    }
+      sink: string;
+      probe: Record<string, string>;
+      contentHtml: string | null;
+      sinkFallback: boolean;
+      sinkError: string | null;
+      path: string;
+      articles: number;
+      mainText: string;
+      diag: unknown;
+      sidebarPanel: boolean;
+      sections: boolean;
+      hasLatest: boolean;
+      hasStarred: boolean;
+      hasBrand: boolean;
+      feedMenu: boolean;
+      bodyOverflow: string;
+      documentScrolls: boolean;
+      listScrolls: boolean;
+      hasScript: boolean;
+      hasOnclick: boolean;
+      hasJsUrl: boolean;
+      imgLoading: string | null;
+      hasLiteYoutube: boolean;
+      liteVideoId: string | null;
+      liteDefined: boolean;
+      liteUpgraded: boolean;
+      liteStyled: boolean;
+      comicCaption: string | null;
+      comicImgTitle: string | null;
+      titleText: string | null;
+      titleImg: boolean;
+      titleXss: boolean;
+      linkHref: string | null;
+      warnEmoji: boolean;
+      warnBare: boolean;
+    };
 
-    console.log(`display sink under test: ${report.sink}`)
-    console.log('sanitizer probe:', JSON.stringify(report.probe))
-    console.log('content html:', JSON.stringify(report.contentHtml), 'fallback:', report.sinkFallback, 'error:', report.sinkError, 'path:', report.path)
-    console.log('diag:', JSON.stringify(report.diag), 'articles:', report.articles, 'main:', JSON.stringify(report.mainText))
+    console.log(`display sink under test: ${report.sink}`);
+    console.log("sanitizer probe:", JSON.stringify(report.probe));
+    console.log(
+      "content html:",
+      JSON.stringify(report.contentHtml),
+      "fallback:",
+      report.sinkFallback,
+      "error:",
+      report.sinkError,
+      "path:",
+      report.path,
+    );
+    console.log(
+      "diag:",
+      JSON.stringify(report.diag),
+      "articles:",
+      report.articles,
+      "main:",
+      JSON.stringify(report.mainText),
+    );
     const pencil = (await view.evaluate(`
       (() => {
         const b = document.querySelector('button[title="Rename feed"]')
@@ -375,8 +426,8 @@ it(
         const cs = getComputedStyle(b)
         return { exists: true, w: r.width, h: r.height, x: r.x, y: r.y, opacity: cs.opacity, display: cs.display, visibility: cs.visibility, text: b.textContent }
       })()
-    `)) as Record<string, unknown>
-    console.log('pencil probe:', JSON.stringify(pencil))
+    `)) as Record<string, unknown>;
+    console.log("pencil probe:", JSON.stringify(pencil));
     // Click the hover-pencil: the rename editor must take the cursor on appear.
     const renameFocus = (await view.evaluate(`
       (() => {
@@ -392,70 +443,73 @@ it(
           tick()
         })
       })()
-    `)) as { found: boolean; focused: boolean }
-    console.log('rename focus probe:', JSON.stringify(renameFocus))
-    expect(report.hasScript).toBe(false) // <script> stripped
+    `)) as { found: boolean; focused: boolean };
+    console.log("rename focus probe:", JSON.stringify(renameFocus));
+    expect(report.hasScript).toBe(false); // <script> stripped
     // The chrome itself — the navbar and sidebar the old app had (regression
     // guard for the port: these must survive any future restyle pass).
-    expect(report.sidebarPanel).toBe(true) // FeedPanel aside present
-    expect(report.sections).toBe(true) // "Sections" heading
-    expect(report.hasLatest).toBe(true) // Latest row (with total unread)
-    expect(report.hasStarred).toBe(true) // Starred row
-    expect(report.hasBrand).toBe(true) // "Miniflux Reader" brand
-    expect(report.feedMenu).toBe(true) // feed-menu trigger (per-feed options)
+    expect(report.sidebarPanel).toBe(true); // FeedPanel aside present
+    expect(report.sections).toBe(true); // "Sections" heading
+    expect(report.hasLatest).toBe(false); // no aggregate row: home is a link list
+    expect(report.hasStarred).toBe(true); // Starred row
+    expect(report.hasBrand).toBe(true); // "Miniflux Reader" brand
+    expect(report.feedMenu).toBe(true); // feed-menu trigger (per-feed options)
     // Scrolling contract: the document never scrolls; the panes do. Auto-read's
     // scroll listener, next/prev scrollToEntry and the sidebar all ride on it.
-    expect(report.bodyOverflow).toBe('hidden')
-    expect(report.documentScrolls).toBe(false)
-    expect(report.listScrolls).toBe(true)
-    expect(renameFocus.focused).toBe(true) // rename editor takes the cursor when it appears
-    expect(report.hasOnclick).toBe(false) // event handlers stripped
-    expect(report.hasJsUrl).toBe(false) // javascript: URL stripped
-    expect(report.imgLoading).toBe('lazy') // applyEmbedHints: the old lazyHtml pass
-    expect(report.hasLiteYoutube).toBe(true) // YouTube iframe → custom element
-    expect(report.liteVideoId).toBe('dQw4w9WgXcQ')
-    expect(report.liteDefined).toBe(true) // lite-youtube-embed imported (defines the element)
-    expect(report.liteUpgraded).toBe(true) // …so the preview actually rendered
-    expect(report.liteStyled).toBe(true) // …and its stylesheet loaded (poster visible)
-    expect(report.comicCaption).toBe('Alt text: the comic joke') // xkcd alt text rendered
-    expect(report.comicImgTitle).toBe(null) // …and the tooltip dropped (MF parity)
+    expect(report.bodyOverflow).toBe("hidden");
+    expect(report.documentScrolls).toBe(false);
+    expect(report.listScrolls).toBe(true);
+    expect(renameFocus.focused).toBe(true); // rename editor takes the cursor when it appears
+    expect(report.hasOnclick).toBe(false); // event handlers stripped
+    expect(report.hasJsUrl).toBe(false); // javascript: URL stripped
+    expect(report.imgLoading).toBe("lazy"); // applyEmbedHints: the old lazyHtml pass
+    expect(report.hasLiteYoutube).toBe(true); // YouTube iframe → custom element
+    expect(report.liteVideoId).toBe("dQw4w9WgXcQ");
+    expect(report.liteDefined).toBe(true); // lite-youtube-embed imported (defines the element)
+    expect(report.liteUpgraded).toBe(true); // …so the preview actually rendered
+    expect(report.liteStyled).toBe(true); // …and its stylesheet loaded (poster visible)
+    expect(report.comicCaption).toBe("Alt text: the comic joke"); // xkcd alt text rendered
+    expect(report.comicImgTitle).toBe(null); // …and the tooltip dropped (MF parity)
     // A title is never markup: the tag stays text, no element appears, nothing runs.
-    expect(report.titleText).toContain('<img src=x onerror=')
-    expect(report.titleImg).toBe(false)
-    expect(report.titleXss).toBe(false)
-    expect(report.linkHref).toBe('https://example.com/relative') // relative → absolute against feed base
+    expect(report.titleText).toContain("<img src=x onerror=");
+    expect(report.titleImg).toBe(false);
+    expect(report.titleXss).toBe(false);
+    expect(report.linkHref).toBe("https://example.com/relative"); // relative → absolute against feed base
     // fetch-error glyph: yellow ⚠️ (emoji presentation), never a bare/text ⚠ (renders red).
-    expect(report.warnEmoji).toBe(true)
-    expect(report.warnBare).toBe(false)
+    expect(report.warnEmoji).toBe(true);
+    expect(report.warnBare).toBe(false);
   } finally {
-    await view.close()
+    await view.close();
   }
-}, 30_000)
+}, 30_000);
 
-it(
-  'reading behaviours: windowing, auto-read on scroll, and click semantics',
-  async () => {
-    const view = new Bun.WebView({ width: 1100, height: 800 })
-    try {
-      await signIn(view)
-      await view.navigate(`${BASE}/`)
+it("reading behaviours: windowing, auto-read on scroll, and click semantics", async () => {
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    await openFeedView(view);
 
-      const readState = (i: number): string =>
-        `const a = document.querySelectorAll("article")[${i}]; return a && a.className.includes("bg-gray-50") ? "read" : "unread"`
+    const readState = (i: number): string =>
+      `const a = document.querySelectorAll("article")[${i}]; return a && a.className.includes("bg-gray-50") ? "read" : "unread"`;
 
-      // First window only (VIEW_PAGE_SIZE), and nothing is read before the user
-      // has scrolled — visibility alone marks nothing (old auto-read.spec).
-      const firstWindow = (await view.evaluate(
-        until('const n = document.querySelectorAll("article").length; return n > 0 ? n : 0'),
-      )) as number
-      console.log('first window:', firstWindow, '| article 0:', await view.evaluate(`(() => { ${readState(0)} })()`))
-      expect(firstWindow).toBe(100)
-      expect((await view.evaluate(`(() => { ${readState(0)} })()`)) as string).toBe('unread')
+    // First window only (VIEW_PAGE_SIZE), and nothing is read before the user
+    // has scrolled — visibility alone marks nothing (old auto-read.spec).
+    const firstWindow = (await view.evaluate(
+      until('const n = document.querySelectorAll("article").length; return n > 0 ? n : 0'),
+    )) as number;
+    console.log(
+      "first window:",
+      firstWindow,
+      "| article 0:",
+      await view.evaluate(`(() => { ${readState(0)} })()`),
+    );
+    expect(firstWindow).toBe(100);
+    expect((await view.evaluate(`(() => { ${readState(0)} })()`)) as string).toBe("unread");
 
-      // Scrolling to the sentinel pulls the next window (old pagination.spec).
-      // Target the sentinel itself: the list's 100dvh bottom padding sits below
-      // it, so jumping to scrollHeight overshoots the observer's rootMargin.
-      const scrolled = (await view.evaluate(`
+    // Scrolling to the sentinel pulls the next window (old pagination.spec).
+    // Target the sentinel itself: the list's 100dvh bottom padding sits below
+    // it, so jumping to scrollHeight overshoots the observer's rootMargin.
+    const scrolled = (await view.evaluate(`
         (() => {
           const el = document.querySelector('[data-testid="entry-scroll"]')
           const s = document.getElementById('entry-sentinel')
@@ -463,142 +517,303 @@ it(
           el.scrollTop = top - el.clientHeight + 100
           return Math.round(el.scrollTop)
         })()
-      `)) as number
-      const articles = (await view.evaluate(
-        until('const n = document.querySelectorAll("article").length; return n >= 120 ? n : 0'),
-      )) as number
-      console.log('scrolled to sentinel:', scrolled, '| windowed articles:', articles)
-      expect(articles).toBeGreaterThan(100)
+      `)) as number;
+    const articles = (await view.evaluate(
+      until('const n = document.querySelectorAll("article").length; return n >= 120 ? n : 0'),
+    )) as number;
+    console.log("scrolled to sentinel:", scrolled, "| windowed articles:", articles);
+    expect(articles).toBeGreaterThan(100);
 
-      // Auto-read: entries the scroll carried above the band are read, the ones
-      // still below it are not.
-      await view.evaluate(`(() => { const el = document.querySelector('[data-testid="entry-scroll"]'); el.scrollTop = 2400; return el.scrollTop })()`)
-      const firstAfter = (await view.evaluate(until(`${readState(0)} === "read" ? "read" : ""`))) as string
-      const farState = (await view.evaluate(`(() => { ${readState(115)} })()`)) as string
-      console.log('auto-read:', firstAfter, '| far entry:', farState)
-      expect(firstAfter).toBe('read')
-      expect(farState).toBe('unread')
+    // Auto-read: entries the scroll carried above the band are read, the ones
+    // still below it are not.
+    await view.evaluate(
+      `(() => { const el = document.querySelector('[data-testid="entry-scroll"]'); el.scrollTop = 2400; return el.scrollTop })()`,
+    );
+    const firstAfter = (await view.evaluate(
+      until(`${readState(0)} === "read" ? "read" : ""`),
+    )) as string;
+    const farState = (await view.evaluate(`(() => { ${readState(115)} })()`)) as string;
+    console.log("auto-read:", firstAfter, "| far entry:", farState);
+    expect(firstAfter).toBe("read");
+    expect(farState).toBe("unread");
 
-      // Click semantics (restored): a link click marks read; a card-body click
-      // only toggles the fold. Use entries the scroll left below the band.
-      const unreadIds = (await view.evaluate(`
+    // Click semantics (restored): a link click marks read; a card-body click
+    // only toggles the fold. Use entries the scroll left below the band.
+    const unreadIds = (await view.evaluate(`
         (() => [...document.querySelectorAll('article')]
           .filter((a) => !a.className.includes('bg-gray-50'))
           .slice(-2)
           .map((a) => a.getAttribute('data-entry-id')))()
-      `)) as string[]
-      expect(unreadIds.length).toBe(2)
-      const [linkId, cardId] = unreadIds as [string, string]
+      `)) as string[];
+    expect(unreadIds.length).toBe(2);
+    const [linkId, cardId] = unreadIds as [string, string];
 
-      await view.evaluate(`(() => { document.querySelector('[data-entry-id="${linkId}"] a').click(); return true })()`)
-      const linkRead = (await view.evaluate(
-        until(`const a = document.querySelector('[data-entry-id="${linkId}"]'); return a && a.className.includes("bg-gray-50") ? "read" : ""`),
-      )) as string
-      expect(linkRead).toBe('read')
+    await view.evaluate(
+      `(() => { document.querySelector('[data-entry-id="${linkId}"] a').click(); return true })()`,
+    );
+    const linkRead = (await view.evaluate(
+      until(
+        `const a = document.querySelector('[data-entry-id="${linkId}"]'); return a && a.className.includes("bg-gray-50") ? "read" : ""`,
+      ),
+    )) as string;
+    expect(linkRead).toBe("read");
 
-      const cardState = (await view.evaluate(
-        `(() => { const a = document.querySelector('[data-entry-id="${cardId}"]'); return a.className.includes('bg-gray-50') ? 'read' : 'unread' })()`,
-      )) as string
-      console.log('link click ->', linkRead, '| card-body click state:', cardState)
-      expect(cardState).toBe('unread')
-    } finally {
-      await view.close()
-    }
-  },
-  45_000,
-)
+    const cardState = (await view.evaluate(
+      `(() => { const a = document.querySelector('[data-entry-id="${cardId}"]'); return a.className.includes('bg-gray-50') ? 'read' : 'unread' })()`,
+    )) as string;
+    console.log("link click ->", linkRead, "| card-body click state:", cardState);
+    expect(cardState).toBe("unread");
+  } finally {
+    await view.close();
+  }
+}, 45_000);
 
-it(
-  'URL shape survives the back button',
-  async () => {
-    const view = new Bun.WebView({ width: 1100, height: 800 })
-    try {
-      await signIn(view)
-      await view.navigate(`${BASE}/`)
-      await view.evaluate(until('return document.querySelectorAll("article").length > 0 ? 1 : 0'))
+it("URL shape survives the back button", async () => {
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    await view.navigate(`${BASE}/`);
 
-      const href = (await view.evaluate(`
+    const href = (await view.evaluate(`
         (() => {
           const a = [...document.querySelectorAll('a')].find((x) => (x.getAttribute('href') ?? '').includes('feed='))
           if (!a) return null
           a.click()
           return a.getAttribute('href')
         })()
-      `)) as string | null
-      await view.evaluate(until('return location.search.includes("feed=") ? 1 : 0'))
-      const afterClick = (await view.evaluate(`location.pathname + location.search`)) as string
+      `)) as string | null;
+    await view.evaluate(until('return location.search.includes("feed=") ? 1 : 0'));
+    const afterClick = (await view.evaluate(`location.pathname + location.search`)) as string;
 
-      await view.evaluate(`history.back()`)
-      await view.evaluate(until('return location.search.includes("feed=") ? 0 : 1'))
-      const afterBack = (await view.evaluate(`location.pathname + location.search`)) as string
-      console.log('URL probe — link:', href, '| after click:', afterClick, '| after back:', afterBack)
-      expect(afterClick).toContain('feed=')
-      expect(afterBack).toBe('/')
-    } finally {
-      await view.close()
-    }
-  },
-  45_000,
-)
+    await view.evaluate(`history.back()`);
+    await view.evaluate(until('return location.search.includes("feed=") ? 0 : 1'));
+    const afterBack = (await view.evaluate(`location.pathname + location.search`)) as string;
+    console.log(
+      "URL probe — link:",
+      href,
+      "| after click:",
+      afterClick,
+      "| after back:",
+      afterBack,
+    );
+    expect(afterClick).toContain("feed=");
+    expect(afterBack).toBe("/");
+  } finally {
+    await view.close();
+  }
+}, 45_000);
 
-it(
-  'header names a feed the sidebar hides (everything read, unread-only view)',
-  async () => {
-    // Read every entry in the fixture: the feed now has nothing unread, so the
-    // sidebar drops it — the header must still name it (it showed "Feed <uuid>").
-    const handle = openDatabase(fixtureDbPath)
-    const feedId = (handle.sqlite.query('SELECT id FROM feeds LIMIT 1').get() as { id: string }).id
-    handle.sqlite.run("UPDATE entries SET status = 'read'; UPDATE feeds SET parsing_error_count = 0")
-    handle.sqlite.close()
+it("header names a feed the sidebar hides (everything read, unread-only view)", async () => {
+  // Read every entry in the fixture: the feed now has nothing unread, so the
+  // sidebar drops it — the header must still name it (it showed "Feed <uuid>").
+  const handle = openDatabase(fixtureDbPath);
+  const feedId = (handle.sqlite.query("SELECT id FROM feeds LIMIT 1").get() as { id: string }).id;
+  handle.sqlite.run("UPDATE entries SET status = 'read'; UPDATE feeds SET parsing_error_count = 0");
+  handle.sqlite.close();
 
-    const view = new Bun.WebView({ width: 1100, height: 800 })
-    try {
-      await signIn(view)
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
 
-      await view.navigate(`${BASE}/?feed=${feedId}`)
-      // Wait for the CORRECT label (the id fallback renders first, so a
-      // non-empty check would resolve instantly).
-      const label = (await view.evaluate(
-        until(
-          `const t = document.querySelector('[data-testid="feed-menu-trigger"]'); const v = t ? t.textContent.trim() : ''; return v.startsWith('Blog') ? v : ''`,
-          5000,
-        ),
-      )) as string
-      const finalLabel = (await view.evaluate(
-        `(() => { const t = document.querySelector('[data-testid="feed-menu-trigger"]'); return t ? t.textContent.trim() : '' })()`,
-      )) as string
-      // The sidebar keeps the view's own feed even with nothing unread in it —
-      // the server is asked for the current feed for exactly this reason.
-      const sidebarText = (await view.evaluate(
-        `(() => { const p = document.querySelector('[data-testid="feed-panel"]'); return p ? p.textContent : '' })()`,
-      )) as string
-      console.log('header label:', JSON.stringify(finalLabel), '| resolved:', JSON.stringify(label))
-      expect(sidebarText).toContain('Blog')
-      expect(finalLabel.startsWith('Blog')).toBe(true)
-      expect(finalLabel.includes(feedId)).toBe(false)
-    } finally {
-      await view.close()
-    }
-  },
-  45_000,
-)
+    await view.navigate(`${BASE}/?feed=${feedId}`);
+    // Wait for the CORRECT label (the id fallback renders first, so a
+    // non-empty check would resolve instantly).
+    const label = (await view.evaluate(
+      until(
+        `const t = document.querySelector('[data-testid="feed-menu-trigger"]'); const v = t ? t.textContent.trim() : ''; return v.startsWith('Blog') ? v : ''`,
+        5000,
+      ),
+    )) as string;
+    const finalLabel = (await view.evaluate(
+      `(() => { const t = document.querySelector('[data-testid="feed-menu-trigger"]'); return t ? t.textContent.trim() : '' })()`,
+    )) as string;
+    // The sidebar keeps the view's own feed even with nothing unread in it —
+    // the server is asked for the current feed for exactly this reason.
+    const sidebarText = (await view.evaluate(
+      `(() => { const p = document.querySelector('[data-testid="feed-panel"]'); return p ? p.textContent : '' })()`,
+    )) as string;
+    console.log("header label:", JSON.stringify(finalLabel), "| resolved:", JSON.stringify(label));
+    expect(sidebarText).toContain("Blog");
+    expect(finalLabel.startsWith("Blog")).toBe(true);
+    expect(finalLabel.includes(feedId)).toBe(false);
+  } finally {
+    await view.close();
+  }
+}, 45_000);
+
+it("home lists favorited feeds and nothing else", async () => {
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    // Earlier tests mark everything read, which hides the feed from the sidebar
+    // (hideEmptyFeeds) and leaves nothing to click.
+    restoreUnread();
+    await signIn(view);
+
+    // Home is links, not entries: no reading list, no Latest row.
+    await view.navigate(`${BASE}/`);
+    const home = (await view.evaluate(`
+        (() => {
+          const deadline = Date.now() + 5000
+          return new Promise((resolve) => {
+            const tick = () => {
+              const panel = document.querySelector('[data-testid="feed-panel"]')
+              const text = panel ? panel.textContent : ''
+              if (text && text.includes('Blog')) return resolve({
+                hasHome: !!document.querySelector('[data-testid="home"]'),
+                noFavorites: !!document.querySelector('[data-testid="home-no-favorites"]'),
+                links: document.querySelectorAll('[data-testid="home-favorite-link"]').length,
+                entries: document.querySelectorAll('[data-entry-id]').length,
+                hasLatest: text.includes('Latest'),
+                hasStarred: text.includes('Starred'),
+              })
+              if (Date.now() > deadline) return resolve(null)
+              setTimeout(tick, 50)
+            }
+            tick()
+          })
+        })()
+      `)) as {
+      hasHome: boolean;
+      noFavorites: boolean;
+      links: number;
+      entries: number;
+      hasLatest: boolean;
+      hasStarred: boolean;
+    } | null;
+    console.log("home before favoriting:", JSON.stringify(home));
+    expect(home).not.toBeNull();
+    expect(home!.hasHome).toBe(true);
+    expect(home!.noFavorites).toBe(true);
+    expect(home!.links).toBe(0);
+    expect(home!.entries).toBe(0); // a navigation page, not a reading surface
+    expect(home!.hasLatest).toBe(false); // the old aggregate is gone
+    expect(home!.hasStarred).toBe(true);
+
+    // Favorite the feed from its own menu.
+    await view.click('[data-testid="feed-panel"] a[href*="?feed="]');
+    await view.click('[data-testid="feed-menu-trigger"]');
+    const menuText = (await view.evaluate(
+      `(() => { const d = document.getElementById('feed-menu'); return d ? d.textContent : '' })()`,
+    )) as string;
+    expect(menuText).toContain("Favorite feed");
+    await view.click('[data-testid=\"feed-menu-favorite\"]');
+    await Bun.sleep(300);
+    // The row has now flipped its own label, which is the confirmation.
+    await view.click('[data-testid="feed-menu-trigger"]');
+    const flipped = (await view.evaluate(
+      `(() => { const d = document.getElementById('feed-menu'); return d ? d.textContent : '' })()`,
+    )) as string;
+    expect(flipped).toContain("Unfavorite feed");
+
+    // Star sits immediately left of the unread count. Scope to the favorited
+    // feed row: categories carry the same testid on their own count.
+    const clusterOrder = (await view.evaluate(
+      `(() => {
+        const star = document.querySelector('[data-testid="feed-favorite"]')
+        if (!star) return ''
+        const cluster = star.parentElement
+        return [...cluster.children]
+          .map((child) => child.getAttribute('data-testid') || child.tagName)
+          .join(',')
+      })()`,
+    )) as string;
+    console.log("sidebar right-hand cluster:", clusterOrder);
+    expect(clusterOrder).toContain("feed-favorite");
+    expect(clusterOrder.indexOf("feed-favorite")).toBeLessThan(clusterOrder.indexOf("feed-count"));
+    await view.press("Escape");
+
+    // The link appears on the home page, and the feed stays in its category.
+    await view.navigate(`${BASE}/`);
+    const after = (await view.evaluate(`
+        (() => {
+          const deadline = Date.now() + 5000
+          return new Promise((resolve) => {
+            const tick = () => {
+              const link = document.querySelector('[data-testid="home-favorite-link"]')
+              if (link) return resolve({
+                links: document.querySelectorAll('[data-testid="home-favorite-link"]').length,
+                label: link.textContent.trim(),
+                href: link.getAttribute('href'),
+                starred: !!document.querySelector('[data-testid="feed-favorite"]'),
+                count: (() => {
+                  const c = link.querySelector('[data-testid="home-favorite-count"]')
+                  return c ? Number(c.textContent.trim()) : null
+                })(),
+              })
+              if (Date.now() > deadline) return resolve(null)
+              setTimeout(tick, 50)
+            }
+            tick()
+          })
+        })()
+      `)) as {
+      links: number;
+      label: string;
+      href: string;
+      starred: boolean;
+      count: number | null;
+    } | null;
+    console.log("home after favoriting:", JSON.stringify(after));
+    expect(after).not.toBeNull();
+    expect(after!.links).toBe(1);
+    expect(after!.label).toContain("Blog");
+    expect(after!.href).toMatch(/^\/?\?feed=/);
+    expect(after!.starred).toBe(true); // sidebar marks it too
+    // The count rides along, so the home page answers "how much is waiting"
+    // without opening the feed.
+    expect(after!.count).toBe(120); // the fixture: 120 entries, every one unread
+
+    // A favorite with nothing unread is NOT listed — but the page must not
+    // claim there are no favorites either. It has to say the real reason.
+    const handle = openDatabase(fixtureDbPath);
+    handle.sqlite.run("UPDATE entries SET status = 'read'");
+    handle.sqlite.close();
+    await view.navigate(`${BASE}/`);
+    const caughtUp = (await view.evaluate(
+      until(
+        `const m = document.querySelector('[data-testid="home-caught-up"]'); return m ? m.textContent.trim() : ''`,
+      ),
+    )) as string;
+    const linksWhileRead = (await view.evaluate(
+      `document.querySelectorAll('[data-testid="home-favorite-link"]').length`,
+    )) as number;
+    console.log("home with everything read:", JSON.stringify(caughtUp), "| links:", linksWhileRead);
+    expect(caughtUp).toContain("Nothing unread");
+    expect(linksWhileRead).toBe(0);
+
+    // And unfavoriting returns it to the plain "no favorites" state. Everything
+    // is read now, so open the feed directly: `openFeedView` waits for entries,
+    // and the unread-only view has none.
+    await view.navigate(`${BASE}/?feed=${fixtureFeedId()}`);
+    await view.click('[data-testid="feed-menu-trigger"]');
+    await view.click('[data-testid=\"feed-menu-favorite\"]');
+    await Bun.sleep(300);
+    await view.navigate(`${BASE}/`);
+    const emptied = (await view.evaluate(
+      until(
+        `const m = document.querySelector('[data-testid="home-no-favorites"]'); return m ? m.textContent.trim() : ''`,
+      ),
+    )) as string;
+    expect(emptied).toContain("No favorite feeds yet");
+  } finally {
+    await view.close();
+  }
+}, 45_000);
 
 // Runs last: it expands an entry (which marks it read).
-it(
-  'the comic rewrite leaves other domains alone',
-  async () => {
-    const view = new Bun.WebView({ width: 1100, height: 800 })
-    try {
-      await signIn(view)
-      // The previous test marks everything read, and the default view is
-      // unread-only: restore the list so there are cards to expand.
-      const handle = openDatabase(fixtureDbPath)
-      handle.sqlite.run("UPDATE entries SET status = 'unread'")
-      handle.sqlite.close()
-      await view.navigate(`${BASE}/`)
-      // Expand the entry whose image carries a title on a NON-comic URL.
-      const clicked = (await view.evaluate(
-        until(`
+it("the comic rewrite leaves other domains alone", async () => {
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    // The previous test marks everything read, and the default view is
+    // unread-only: restore the list so there are cards to expand.
+    const handle = openDatabase(fixtureDbPath);
+    handle.sqlite.run("UPDATE entries SET status = 'unread'");
+    handle.sqlite.close();
+    await openFeedView(view);
+    // Expand the entry whose image carries a title on a NON-comic URL.
+    const clicked = (await view.evaluate(
+      until(`
           const card = [...document.querySelectorAll('[data-entry-id]')].find(
             (c) => (c.querySelector('.msubject')?.textContent ?? '').trim() === 'Plain 50',
           )
@@ -606,145 +821,134 @@ it(
           card.click()
           return card.getAttribute('aria-expanded') === 'true' ? 'expanded' : 'clicked'
         `),
-      )) as string
-      console.log('plain-entry expansion:', clicked)
-      const kept = (await view.evaluate(
-        until(`return document.querySelector('img[title="Not a comic"]') ? 'kept' : ''`),
-      )) as string
-      expect(kept).toBe('kept') // the rule keys off the entry's domain, not the feed
-    } finally {
-      await view.close()
-    }
-  },
-  45_000,
-)
+    )) as string;
+    console.log("plain-entry expansion:", clicked);
+    const kept = (await view.evaluate(
+      until(`return document.querySelector('img[title="Not a comic"]') ? 'kept' : ''`),
+    )) as string;
+    expect(kept).toBe("kept"); // the rule keys off the entry's domain, not the feed
+  } finally {
+    await view.close();
+  }
+}, 45_000);
 
 // Runs last: it adds feeds (with one unread item each, so the sidebar shows
 // them) to assert the rendered order.
-it(
-  'the sidebar sorts feeds case-insensitively',
-  async () => {
-    const handle = openDatabase(fixtureDbPath)
-    const now = epochMs(Date.now())
-    for (const title of ['apple feed', 'cherry feed', 'Zebra feed']) {
-      const feedId = newFeedId(now)
-      const slug = title.replace(/\s+/g, '-')
-      handle.sqlite.run(
-        'INSERT INTO feeds (id, user_id, category_id, title, feed_url, site_url, created_at) VALUES (?, (SELECT id FROM users LIMIT 1), (SELECT id FROM categories LIMIT 1), ?, ?, ?, ?)',
-        [feedId, title, `https://example.com/${slug}`, `https://example.com/${slug}/`, now],
-      )
-      handle.sqlite.run(
-        `INSERT INTO entries (id, user_id, feed_id, hash, title, content, published_at, created_at, changed_at)
+it("the sidebar sorts feeds case-insensitively", async () => {
+  const handle = openDatabase(fixtureDbPath);
+  const now = epochMs(Date.now());
+  for (const title of ["apple feed", "cherry feed", "Zebra feed"]) {
+    const feedId = newFeedId(now);
+    const slug = title.replace(/\s+/g, "-");
+    handle.sqlite.run(
+      "INSERT INTO feeds (id, user_id, category_id, title, feed_url, site_url, created_at) VALUES (?, (SELECT id FROM users LIMIT 1), (SELECT id FROM categories LIMIT 1), ?, ?, ?, ?)",
+      [feedId, title, `https://example.com/${slug}`, `https://example.com/${slug}/`, now],
+    );
+    handle.sqlite.run(
+      `INSERT INTO entries (id, user_id, feed_id, hash, title, content, published_at, created_at, changed_at)
          VALUES (?, (SELECT id FROM users LIMIT 1), ?, ?, ?, '<p>body</p>', ?, ?, ?)`,
-        [newEntryId(now), feedId, `case-${slug}`, `${title} item`, now, now, now],
-      )
-    }
-    handle.sqlite.close()
+      [newEntryId(now), feedId, `case-${slug}`, `${title} item`, now, now, now],
+    );
+  }
+  handle.sqlite.close();
 
-    const view = new Bun.WebView({ width: 1100, height: 800 })
-    try {
-      await signIn(view)
-      await view.navigate(`${BASE}/`)
-      const order = (await view.evaluate(
-        until(`
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    await view.navigate(`${BASE}/`);
+    const order = (await view.evaluate(
+      until(`
           const els = [...document.querySelectorAll('a[href^="/?feed="] span')]
           return els.length >= 4 ? JSON.stringify(els.map((el) => el.textContent)) : ''
         `),
-      )) as string
-      console.log('sidebar feed order:', order)
-      // Binary collation would render ['Blog', 'Zebra feed', 'apple feed', 'cherry feed'].
-      expect(JSON.parse(order)).toEqual(['apple feed', 'Blog', 'cherry feed', 'Zebra feed'])
-    } finally {
-      await view.close()
-    }
-  },
-  45_000,
-)
+    )) as string;
+    console.log("sidebar feed order:", order);
+    // Binary collation would render ['Blog', 'Zebra feed', 'apple feed', 'cherry feed'].
+    expect(JSON.parse(order)).toEqual(["apple feed", "Blog", "cherry feed", "Zebra feed"]);
+  } finally {
+    await view.close();
+  }
+}, 45_000);
 
 // Pins a decision, not just behaviour: "mark all read" marks exactly the ids the
 // view fetched (the loaded window), never a server-side re-lookup of candidates.
 // A bulk implementation would mark all 100+ and fail this.
-it(
-  'mark all read marks exactly the displayed window',
-  async () => {
-    const reset = openDatabase(fixtureDbPath)
-    reset.sqlite.run("UPDATE entries SET status = 'unread'")
-    const total = (reset.sqlite.query('SELECT count(*) AS n FROM entries').get() as { n: number }).n
-    reset.sqlite.close()
+it("mark all read marks exactly the displayed window", async () => {
+  const reset = openDatabase(fixtureDbPath);
+  reset.sqlite.run("UPDATE entries SET status = 'unread'");
+  const total = (reset.sqlite.query("SELECT count(*) AS n FROM entries").get() as { n: number }).n;
+  reset.sqlite.close();
 
-    const counts = () => {
-      const handle = openDatabase(fixtureDbPath)
-      const rows = handle.sqlite.query('SELECT status, count(*) AS n FROM entries GROUP BY status').all() as Array<{
-        status: string
-        n: number
-      }>
-      handle.sqlite.close()
-      return Object.fromEntries(rows.map((row) => [row.status, row.n])) as Record<string, number>
-    }
+  const counts = () => {
+    const handle = openDatabase(fixtureDbPath);
+    const rows = handle.sqlite
+      .query("SELECT status, count(*) AS n FROM entries GROUP BY status")
+      .all() as Array<{
+      status: string;
+      n: number;
+    }>;
+    handle.sqlite.close();
+    return Object.fromEntries(rows.map((row) => [row.status, row.n])) as Record<string, number>;
+  };
 
-    const view = new Bun.WebView({ width: 1100, height: 800 })
-    try {
-      await signIn(view)
-      await view.navigate(`${BASE}/`)
-      await view.evaluate(
-        until(`return document.querySelectorAll('[data-entry-id]').length >= 100 ? 'ready' : ''`),
-      )
-      await view.evaluate(
-        `(() => { document.querySelector('button[aria-label="Mark all read"]').click(); return true })()`,
-      )
-      let seen: Record<string, number> = {}
-      for (let i = 0; i < 50; i++) {
-        seen = counts()
-        if ((seen.read ?? 0) >= 100) break
-        await Bun.sleep(100)
-      }
-      console.log('statuses after mark-all:', JSON.stringify(seen), '| total:', total)
-      expect(seen.read).toBe(100) // the loaded window only (VIEW_PAGE_SIZE)
-      expect(seen.unread).toBe(total - 100) // everything past it stays unread
-    } finally {
-      await view.close()
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    await openFeedView(view);
+    await view.evaluate(
+      until(`return document.querySelectorAll('[data-entry-id]').length >= 100 ? 'ready' : ''`),
+    );
+    await view.evaluate(
+      `(() => { document.querySelector('button[aria-label="Mark all read"]').click(); return true })()`,
+    );
+    let seen: Record<string, number> = {};
+    for (let i = 0; i < 50; i++) {
+      seen = counts();
+      if ((seen.read ?? 0) >= 100) break;
+      await Bun.sleep(100);
     }
-  },
-  45_000,
-)
+    console.log("statuses after mark-all:", JSON.stringify(seen), "| total:", total);
+    expect(seen.read).toBe(100); // the loaded window only (VIEW_PAGE_SIZE)
+    expect(seen.unread).toBe(total - 100); // everything past it stays unread
+  } finally {
+    await view.close();
+  }
+}, 45_000);
 
 // The View row used to derive the next mode from the raw override, which is null
 // until a pref is saved: the first click set 'expanded' when 'expanded' was
 // already in effect. Its label was always "expanded" because of a dead
 // `(!x && true)` clause. Both the row and the `v` key now resolve the effective mode.
-it(
-  'the View toggle flips on the first click, and reads truthfully',
-  async () => {
-    const view = new Bun.WebView({ width: 1100, height: 800 })
-    // The row lives in the (closed) feed menu, whose content is in the DOM and
-    // reactive, so its label is readable without opening the dialog. Poll for the
-    // expected value: the click's re-render lands a tick later.
-    const waitForLabel = (expected: string) => until(`
+it("the View toggle flips on the first click, and reads truthfully", async () => {
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  // The row lives in the (closed) feed menu, whose content is in the DOM and
+  // reactive, so its label is readable without opening the dialog. Poll for the
+  // expected value: the click's re-render lands a tick later.
+  const waitForLabel = (expected: string) =>
+    until(`
       const row = [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('View:'))
       const text = row ? row.textContent.trim() : ''
       return text === ${JSON.stringify(expected)} ? text : ''
-    `)
-    const clickView = `(() => {
+    `);
+  const clickView = `(() => {
       [...document.querySelectorAll('button')].find((b) => (b.textContent ?? '').includes('View:'))?.click()
       return true
-    })()`
-    try {
-      await signIn(view)
-      await view.navigate(`${BASE}/`)
+    })()`;
+  try {
+    await signIn(view);
+    await view.navigate(`${BASE}/`);
 
-      const before = (await view.evaluate(waitForLabel('View: expanded'))) as string
-      await view.evaluate(clickView) // first click: must flip
-      const afterFirstClick = (await view.evaluate(waitForLabel('View: list'))) as string
+    const before = (await view.evaluate(waitForLabel("View: expanded"))) as string;
+    await view.evaluate(clickView); // first click: must flip
+    const afterFirstClick = (await view.evaluate(waitForLabel("View: list"))) as string;
 
-      console.log('view label:', JSON.stringify([before, afterFirstClick]))
-      expect(before).toBe('View: expanded') // the default, and the label must say so
-      expect(afterFirstClick).toBe('View: list') // the dead first click would read 'expanded'
-      // The `v` key is not asserted here: the menu row unmounts with its dialog,
-      // so reading it back after a keypress is racy. Both sites now call the same
-      // effectiveViewMode() helper, so the click path covers the logic.
-    } finally {
-      await view.close()
-    }
-  },
-  45_000,
-)
+    console.log("view label:", JSON.stringify([before, afterFirstClick]));
+    expect(before).toBe("View: expanded"); // the default, and the label must say so
+    expect(afterFirstClick).toBe("View: list"); // the dead first click would read 'expanded'
+    // The `v` key is not asserted here: the menu row unmounts with its dialog,
+    // so reading it back after a keypress is racy. Both sites now call the same
+    // effectiveViewMode() helper, so the click path covers the logic.
+  } finally {
+    await view.close();
+  }
+}, 45_000);

@@ -121,6 +121,26 @@ export const panel = authed(async ({ user }, currentFeed: FeedId | null) => {
   })
 })
 
+/**
+ * What the home page needs: the sidebar, and which feeds are favorited. No
+ * entries — the home is a set of links, not a reading surface.
+ */
+export const navigation = authed(async ({ user }) => {
+  const handle = db()
+  const userPrefs = getUserPrefs(handle, user.id)
+  const feedPrefs = getAllFeedPrefs(handle, user.id)
+  return {
+    ...panelFromDb(handle, {
+      userId: user.id,
+      hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+      currentFeed: null,
+      // A favorited feed with nothing unread is still a link on the home page.
+    }),
+    feedPrefs,
+    userPrefs,
+  }
+})
+
 /** One entry's body (raw HTML; the display pipeline runs client-side). */
 export const content = authed(async ({ user }, entryId: EntryId) => {
   const found = getEntryContent(db(), { userId: user.id, entryId })
@@ -204,6 +224,7 @@ const feedPatchSchema = z
     viewMode: z.enum(['expanded', 'list']).optional(),
     sort: z.enum(['oldest', 'newest']).optional(),
     hideReadItems: z.boolean().optional(),
+    favorite: z.boolean().optional(),
   })
   .strict()
 

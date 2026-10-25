@@ -17,6 +17,9 @@ export type FeedPrefs = {
   viewMode?: 'expanded' | 'list'
   sort?: 'oldest' | 'newest'
   hideReadItems?: boolean
+  /** Hand-picked: this feed's link appears on the home page. Orthogonal to
+   *  category — a feed is favorited where it is, nothing moves. */
+  favorite?: boolean
 }
 
 /** Hide feeds with nothing unread. The old app defaulted this to true

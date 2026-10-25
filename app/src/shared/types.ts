@@ -52,7 +52,10 @@ export type FeedInfo = {
 }
 
 export type FeedPanelResult = {
+  /** Feeds the sidebar should show (empty ones may be hidden by preference). */
   feeds: FeedInfo[]
+  /** Every feed, unfiltered — the home page resolves its favorites from here. */
+  allFeeds: FeedInfo[]
   categories: CategoryCount[]
   /** Unread counts per feed — same filter predicate as the lists. */
   counters: Record<FeedId, number>

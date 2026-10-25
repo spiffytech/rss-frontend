@@ -19,6 +19,11 @@ public/.asset-manifest.json
 *.sqlite-shm
 *.sqlite-wal
 
+# runtime scheduler state (written beside the database, never committed)
+.scheduler-heartbeat
+.scheduler-heartbeat.tmp
+.scheduler-off
+
 # tooling
 coverage
 *.tsbuildinfo

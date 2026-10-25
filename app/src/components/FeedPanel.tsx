@@ -28,10 +28,6 @@ import { FeedIcon } from './FeedIcon'
 export const FeedPanel = () => {
   const navigate = useNavigate()
 
-  const totalUnread = createMemo(() =>
-    Object.values(reader.panel.counters).reduce((sum, count) => sum + count, 0),
-  )
-
   // Case-insensitive order inside each folder (the server hands them over in
   // SQLite's binary collation order, which puts every capital letter first).
   const feedsByCategory = createMemo(() => {
@@ -64,11 +60,6 @@ export const FeedPanel = () => {
     reader.renameId === feedId && reader.renameKind === 'feed'
   const isRenamingCategory = (categoryId: string) =>
     reader.renameId === categoryId && reader.renameKind === 'category'
-
-  const isLatestActive = () =>
-    (reader.filter.feedId === undefined || reader.filter.feedId === '') &&
-    reader.filter.starred !== true &&
-    (reader.filter.categoryId === undefined || reader.filter.categoryId === '')
 
   const hideEmptyFeeds = () => reader.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS
 
@@ -123,18 +114,6 @@ export const FeedPanel = () => {
         <ul class="text-sm">
           <li>
             <a
-              href={link({})}
-              class={[
-                'w-full text-left px-2 py-1 rounded hover:bg-gray-100 flex justify-between items-center',
-                { 'bg-gray-100': isLatestActive() },
-              ]}
-            >
-              <span>Latest</span>
-              <span class="text-xs text-gray-500">{totalUnread()}</span>
-            </a>
-          </li>
-          <li>
-            <a
               href={link({ starred: 1 })}
               class={[
                 'w-full text-left px-2 py-1 rounded hover:bg-gray-100 flex justify-between items-center',
@@ -155,7 +134,7 @@ export const FeedPanel = () => {
             {(category) => (
               <Show when={showCategory(feedsByCategory().get(category.id) ?? [])}>
                 <li>
-                  <div class="group flex items-center gap-x-2 text-sm font-semibold">
+                  <div class="group flex items-baseline gap-x-2 text-sm font-semibold">
                     <Show
                       when={isRenamingCategory(category.id)}
                       fallback={
@@ -169,7 +148,7 @@ export const FeedPanel = () => {
                         onSave={() => void saveRename()}
                       />
                     </Show>
-                    <span class="relative flex items-center gap-x-1 shrink-0">
+                    <span class="relative flex items-baseline gap-x-1 shrink-0">
                       <span
                         data-testid="feed-count"
                         class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0"
@@ -191,7 +170,10 @@ export const FeedPanel = () => {
                       {(feed) => (
                         <li
                           class={[
-                            'group flex items-center gap-x-2 text-sm',
+                            // Baseline-aligned so the feed name and its count
+                            // sit on one line of text; the icon opts back into
+                            // centring for itself.
+                            'group flex items-baseline gap-x-2 text-sm',
                             {
                               hidden:
                                 hideEmptyFeeds() &&
@@ -207,7 +189,7 @@ export const FeedPanel = () => {
                               <a
                                 href={link({ feed: feed.id })}
                                 class={[
-                                  'flex-1 min-w-0 flex items-center gap-x-2 py-2 rounded hover:bg-gray-100',
+                                  'flex-1 min-w-0 flex items-baseline gap-x-2 py-2 rounded hover:bg-gray-100',
                                   { 'bg-gray-100': isActiveFeed(feed.id) },
                                 ]}
                                 onClick={(event) => {
@@ -222,10 +204,21 @@ export const FeedPanel = () => {
                           >
                             <RenameEditor onCancel={cancelRename} onSave={() => void saveRename()} />
                           </Show>
-                          {/* Sanctioned deviation: the warning glyph sits LEFT of the count. */}
-                          <span class="relative flex items-center gap-x-1 shrink-0">
+                          {/* Right-hand cluster, left to right: fetch errors,
+                              favorite, unread count (which the pencil replaces
+                              on hover). Sanctioned deviations, both of them. */}
+                          <span class="relative flex items-baseline gap-x-1 shrink-0">
                             <Show when={feed.parsingErrorCount > 0}>
                               <span title="Fetch errors">⚠️</span>
+                            </Show>
+                            <Show when={reader.feedPrefs[feed.id]?.favorite === true}>
+                              <span
+                                data-testid="feed-favorite"
+                                title="On the home page"
+                                class="shrink-0 text-xs text-amber-500"
+                              >
+                                ★
+                              </span>
                             </Show>
                             <span
                               data-testid="feed-count"

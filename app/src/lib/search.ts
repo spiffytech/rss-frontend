@@ -3,14 +3,15 @@
  * feed popover's box. Both boxes sync from the active filter, so the two can
  * never disagree about what is being searched.
  */
-import { createEffect, createSignal } from 'solid-js'
+import { createEffect, createSignal, untrack } from 'solid-js'
 
 import { reader, reloadEntries, setFilter } from './state'
 
 const DEBOUNCE_MS = 300
 
 export const createSearch = () => {
-  const [text, setText] = createSignal(reader.filter.search ?? '')
+  // Initial value only — the effect below keeps it in step with the filter.
+  const [text, setText] = createSignal(untrack(() => reader.filter.search ?? ''))
   let timer: ReturnType<typeof setTimeout> | undefined
 
   // Navigating to another view clears the filter's search — the box clears with it.

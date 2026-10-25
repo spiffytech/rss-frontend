@@ -13,7 +13,7 @@ export const FeedIcon = (props: { feedId: FeedId; title: string }) => {
   const failed = () => reader.iconFailed[props.feedId] === true
 
   return (
-    <span class="inline-flex items-center shrink-0 relative w-5 h-5" aria-hidden="true">
+    <span class="inline-flex items-center self-center shrink-0 relative w-5 h-5" aria-hidden="true">
       <img
         src={`/api/icons/${props.feedId}`}
         alt=""

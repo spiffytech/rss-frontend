@@ -26,8 +26,8 @@ import {
   type UserPrefs,
 } from '../shared/prefs'
 import { shouldAutoRead } from '../shared/reading'
-import type { EntrySummary, FeedPanelResult, ViewCursor } from '../shared/types'
-import { computeUnreadCount } from '../shared/util'
+import type { EntrySummary, FeedInfo, FeedPanelResult, ViewCursor } from '../shared/types'
+import { compareTitlesCI, computeUnreadCount } from '../shared/util'
 
 export type ReaderState = {
   // ---- server truth ----
@@ -65,7 +65,7 @@ export type ReaderState = {
 export const [reader, setReader] = createStore<ReaderState>({
   entries: [],
   nextCursor: null,
-  panel: { feeds: [], categories: [], counters: {} },
+  panel: { feeds: [], allFeeds: [], categories: [], counters: {} },
   userPrefs: {},
   feedPrefs: {},
   filter: {},
@@ -100,6 +100,7 @@ export const loadBootstrap = async (filter: EntriesFilter): Promise<void> => {
     state.nextCursor = result.nextCursor
     applyPanel(state, {
       feeds: result.feeds,
+      allFeeds: result.allFeeds,
       categories: result.categories,
       counters: result.counters,
     })
@@ -157,6 +158,55 @@ const applyPanel = (state: ReaderState, next: FeedPanelResult): void => {
 export const refreshPanel = async (): Promise<void> => {
   const next = await api.panel(currentFeedId())
   setReader((state) => applyPanel(state, next))
+}
+
+/**
+ * Load the sidebar + favorites without touching entries: the home page is a set
+ * of links, so fetching a window of entries for it would be waste.
+ */
+export const loadNavigation = async (): Promise<void> => {
+  const result = await api.navigation()
+  setReader((state) => {
+    state.userPrefs = result.userPrefs
+    state.feedPrefs = result.feedPrefs
+    applyPanel(state, {
+      feeds: result.feeds,
+      allFeeds: result.allFeeds,
+      categories: result.categories,
+      counters: result.counters,
+    })
+  })
+}
+
+/**
+ * Feeds the user hand-picked, alphabetically.
+ *
+ * Resolved against `allFeeds`, not the sidebar's visible subset — the sidebar
+ * hides feeds with nothing unread, and the home page needs to tell "you have no
+ * favorites" apart from "your favorites are all caught up".
+ */
+export const favoriteFeeds = (): FeedInfo[] =>
+  reader.panel.allFeeds
+    .filter((feed) => reader.feedPrefs[feed.id]?.favorite === true)
+    .sort((a, b) => compareTitlesCI(a.title, b.title))
+
+/** The favorites the home page links to: those with something unread. */
+export const favoriteFeedsWithUnread = (): FeedInfo[] =>
+  favoriteFeeds().filter((feed) => (reader.panel.counters[feed.id] ?? 0) > 0)
+
+export const isFavorite = (feedId: FeedId): boolean =>
+  reader.feedPrefs[feedId]?.favorite === true
+
+/** The one mutation the toggle performs; the feed does not move anywhere. */
+export const toggleFavorite = async (feedId: FeedId): Promise<void> => {
+  const next = !isFavorite(feedId)
+  rememberFeedPref(feedId, { favorite: next })
+  try {
+    await api.setPrefs(feedId, { favorite: next })
+  } catch (error) {
+    rememberFeedPref(feedId, { favorite: !next })
+    throw error
+  }
 }
 
 /** Identity filter change (URL navigation). */
@@ -250,11 +300,17 @@ export const currentTitle = (): string => {
     )
   }
   if (filter.starred) return 'Starred'
-  return 'Latest'
+  return 'Home'
 }
 
-export const unreadCount = (): number | null =>
-  computeUnreadCount(reader.filter, reader.panel.feeds, reader.panel.counters)
+/** Unread count for the view in the URL. The home page has no view, so it has
+ *  no count — a total across every feed would describe something that is no
+ *  longer on offer. */
+export const unreadCount = (): number | null => {
+  const filter = reader.filter
+  if (!filter.feedId && !filter.categoryId && !filter.starred && !filter.search) return null
+  return computeUnreadCount(filter, reader.panel.feeds, reader.panel.counters)
+}
 
 // ---- Read/unread: local first, debounced flush, revert on failure ----
 

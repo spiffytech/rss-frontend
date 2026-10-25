@@ -1,6 +1,8 @@
-import { createSearch } from '../lib/search'
-import { markDisplayed, moveAndRead } from '../lib/state'
-import { FeedMenu } from './FeedMenu'
+import { Show } from "solid-js";
+
+import { createSearch } from "../lib/search";
+import { markDisplayed, moveAndRead } from "../lib/state";
+import { FeedMenu } from "./FeedMenu";
 
 /**
  * The reading view's header: sidebar toggle (mobile), brand (desktop), the feed
@@ -10,14 +12,14 @@ import { FeedMenu } from './FeedMenu'
  * Mobile deliberately has no search or ⋯ button: both actions live in the feed
  * menu popover, which leaves the header three touch targets wide instead of six.
  */
-export const TopToolbar = (props: { onToggleSidebar: () => void }) => {
-  const search = createSearch()
+export const TopToolbar = (props: { onToggleSidebar: () => void; reading: boolean }) => {
+  const search = createSearch();
 
   const onMarkAllRead = (): void => {
     // Explicit-ID semantics: marks exactly the IDs this view fetched (the loaded
     // windows) — never hidden rows, never late arrivals.
-    markDisplayed()
-  }
+    markDisplayed();
+  };
 
   return (
     <header class="flex flex-nowrap items-center gap-x-2 min-w-0 px-2 py-2 border-b-2 border-line mb-2">
@@ -38,38 +40,41 @@ export const TopToolbar = (props: { onToggleSidebar: () => void }) => {
 
       <FeedMenu />
 
-      {/* Prev/next story: bare arrows on mobile so the feed name keeps its room;
-          labels return as soon as there is space for them. */}
-      <button
-        type="button"
-        class="toolbar-btn"
-        title="Previous (k)"
-        aria-label="Previous entry (k)"
-        onClick={() => moveAndRead(-1)}
-      >
-        <span aria-hidden="true">▲</span>
-        <span class="hidden md:inline">&nbsp;Prev</span>
-      </button>
-      <button
-        type="button"
-        class="toolbar-btn"
-        title="Next (j)"
-        aria-label="Next entry (j)"
-        onClick={() => moveAndRead(1)}
-      >
-        <span aria-hidden="true">▼</span>
-        <span class="hidden md:inline">&nbsp;Next</span>
-      </button>
+      {/* Prev/next and mark-all-read act on an entry list. On the home page
+          there is none, so they are not rendered at all rather than sitting
+          there doing nothing. */}
+      <Show when={props.reading}>
+        <button
+          type="button"
+          class="toolbar-btn"
+          title="Previous (k)"
+          aria-label="Previous entry (k)"
+          onClick={() => moveAndRead(-1)}
+        >
+          <span aria-hidden="true">▲</span>
+          <span class="hidden md:inline">&nbsp;Prev</span>
+        </button>
+        <button
+          type="button"
+          class="toolbar-btn"
+          title="Next (j)"
+          aria-label="Next entry (j)"
+          onClick={() => moveAndRead(1)}
+        >
+          <span aria-hidden="true">▼</span>
+          <span class="hidden md:inline">&nbsp;Next</span>
+        </button>
 
-      <button
-        type="button"
-        class="toolbar-btn hidden md:inline-flex"
-        title="Mark all read (Shift+A)"
-        aria-label="Mark all read"
-        onClick={onMarkAllRead}
-      >
-        ✓
-      </button>
+        <button
+          type="button"
+          class="toolbar-btn hidden md:inline-flex"
+          title="Mark all read (Shift+A)"
+          aria-label="Mark all read"
+          onClick={onMarkAllRead}
+        >
+          ✓
+        </button>
+      </Show>
 
       <input
         type="search"
@@ -79,7 +84,7 @@ export const TopToolbar = (props: { onToggleSidebar: () => void }) => {
         onInput={(event) => search.onSearchInput(event.currentTarget.value)}
       />
     </header>
-  )
-}
+  );
+};
 
-export default TopToolbar
+export default TopToolbar;
