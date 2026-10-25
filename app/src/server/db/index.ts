@@ -4,27 +4,22 @@
  * Pragmas are ported from the old prefs side-DB (our own code). Migrations run
  * from ./drizzle (drizzle-kit generate).
  *
- * `bun:sqlite` is required lazily (sync, via createRequire) so the module graph
- * loads under any ESM loader — SvelteKit's build-time route analysis imports
- * the server bundle in a worker where `bun:` URLs don't resolve. Only when a
- * handler actually opens the DB does the Bun builtin load (runtime is Bun).
+ * `bun:sqlite` is externalized in vite.config.ts (ssr.external + the build's
+ * rolldownOptions), so Vite leaves the import alone and Bun resolves it at
+ * runtime.
  */
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
-import type { Database } from 'bun:sqlite'
+import { Database } from 'bun:sqlite'
 
 import { drizzle } from 'drizzle-orm/bun-sqlite'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
-
-const nodeRequire = createRequire(import.meta.url)
 
 function openBunDatabase(path: string): Database {
   // `create: true` makes the FILE, not its parent directory (the old prefs
   // side-DB mkdir'd first for exactly this reason).
   mkdirSync(dirname(path), { recursive: true })
-  const { Database } = nodeRequire('bun:sqlite') as typeof import('bun:sqlite')
   return new Database(path, { create: true })
 }
 

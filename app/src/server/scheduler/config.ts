@@ -20,7 +20,7 @@ export interface SchedulerConfig {
   rateHalfLifeDays: number
   /** Ceiling on the failing-feed probe backoff (1h doubling). */
   failingFeedMaxIntervalMinutes: number
-  /** /health reports 503 once the last completed tick is older than this. */
+  /** /health/scheduler answers 503 once the last completed tick is older than this. */
   maxTickAgeMinutes: number
   /** Eligibility filter: skip feeds at/above this parsing_error_count. 0 = never skip. */
   parsingErrorLimit: number

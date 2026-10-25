@@ -78,8 +78,13 @@ export async function subscribe(opts: {
       body,
       signal: AbortSignal.timeout(15_000),
     })
-    return res.ok
-  } catch {
+    if (!res.ok) {
+      console.warn('websub: hub refused subscribe', opts.hub, res.status, opts.topic)
+      return false
+    }
+    return true
+  } catch (error) {
+    console.warn('websub: hub unreachable', opts.hub, opts.topic, error)
     return false
   }
 }

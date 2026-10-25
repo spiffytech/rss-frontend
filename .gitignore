@@ -35,9 +35,9 @@ playground/
 # Tooling debris (job_watch logs, etc.)
 .pi-submarine-watch-*.log
 
-# new SvelteKit app (app/) build output
-app/.svelte-kit/
-app/build/
+# reader app (app/) build output
+app/dist/
+app/public/style.css
 
 # Miniflux import dump — contains the full subscription list; never commit
 import-dump/

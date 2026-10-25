@@ -274,7 +274,15 @@ export function startScheduler(opts?: { handle?: ReaderHandle; config?: Schedule
     // never runs just lapses the subscriptions back to polling.
     if (now - lastWebsubRenewAt > 60 * 60_000) {
       lastWebsubRenewAt = now
-      void renewDue(handle, now).catch(() => {})
+      void renewDue(handle, now)
+        .then(({ renewed, failed }) => {
+          // Quiet when there was nothing due; loud enough that `uc logs` can
+          // answer "are subscriptions still being renewed?".
+          if (renewed > 0 || failed > 0) {
+            console.log(`websub: renew sweep renewed=${renewed} failed=${failed}`)
+          }
+        })
+        .catch((error) => console.error('websub: renew sweep failed', error))
     }
 
     // Fetch pass first: `next_check_at IS NULL` means due, and a fetch that

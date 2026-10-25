@@ -38,6 +38,14 @@ let fixtureDbPath = ''
 
 beforeAll(async () => {
   if (!enabled) return
+  // A server left behind by an interrupted run would silently serve *its*
+  // database — the suite would read another run's state and fail in ways that
+  // look like application bugs.
+  const leftover = await fetch(`${BASE}/health`).then(
+    (res) => res.ok,
+    () => false,
+  )
+  if (leftover) throw new Error(`port ${PORT} is already serving — kill the leftover server first`)
   const dbPath = join(mkdtempSync(join(tmpdir(), 'webview-db-')), 'reader.sqlite')
   fixtureDbPath = dbPath
   const handle = openDatabase(dbPath)
@@ -84,13 +92,20 @@ beforeAll(async () => {
   handle.sqlite.run('UPDATE feeds SET parsing_error_count = 1 WHERE id = ?', [feedId])
   handle.sqlite.close()
 
-  server = spawn('bun', ['build/index.js'], {
-    env: { ...process.env, READER_DB_PATH: dbPath, PORT: String(PORT), SESSION_SECRET: 'webview-smoke', NODE_ENV: 'production', SCHEDULER_ENABLED: '0' },
+  server = spawn('bun', ['server.ts'], {
+    env: {
+      ...process.env,
+      READER_DB_PATH: dbPath,
+      PORT: String(PORT),
+      SESSION_SECRET: 'webview-smoke',
+      NODE_ENV: 'production',
+      SCHEDULER_ENABLED: '0',
+    },
     stdio: 'ignore',
   })
   for (let i = 0; i < 50; i++) {
     try {
-      const res = await fetch(`${BASE}/api/session`)
+      const res = await fetch(`${BASE}/health`)
       if (res.ok) break
     } catch {
       /* not up yet */
@@ -122,27 +137,70 @@ const until = (script: string, timeoutMs = 15_000): string => `
   })()
 `
 
+/**
+ * Signs the fixture account in through the real login form.
+ *
+ * The suite used to call the SvelteKit `/api/login` endpoint directly. Those
+ * endpoints are gone — every read and mutation is a Solid start-mode server
+ * function now, and its wire protocol is internal. Driving the form with real
+ * input (a programmatic `.value =` does not reach Solid's handler) is both more
+ * faithful and immune to that protocol changing.
+ */
+const signIn = async (view: Bun.WebView): Promise<void> => {
+  await view.navigate(`${BASE}/login`)
+
+  // Chrome is spawned once per process and keeps its cookie store, so a later
+  // test's fresh WebView may already be signed in — in which case /login
+  // redirects to the reader and there is no form to fill.
+  const landed = await view.evaluate(`
+    (() => {
+      const deadline = Date.now() + 10000
+      return new Promise((resolve) => {
+        const tick = () => {
+          if (document.querySelector('input[name="username"]')) return resolve('login')
+          if (document.querySelector('[data-testid="feed-menu-trigger"]')) return resolve('reader')
+          if (Date.now() > deadline) return resolve('none')
+          setTimeout(tick, 50)
+        }
+        tick()
+      })
+    })()
+  `)
+  if (landed === 'reader') return
+  if (landed !== 'login') throw new Error(`login page did not render (got ${landed})`)
+
+  await view.click('input[name="username"]')
+  await view.type('spiffy')
+  await view.click('input[name="password"]')
+  await view.type('correct-horse')
+  await view.click('button[type="submit"]')
+
+  // The reader shell mounts after the login RPC resolves and the router lands on /.
+  const ready = await view.evaluate(`
+    (() => {
+      const deadline = Date.now() + 10000
+      return new Promise((resolve) => {
+        const tick = () => {
+          const shell = document.querySelector('[data-testid="feed-menu-trigger"]')
+          const sidebar = document.querySelector('[data-testid="feed-panel"]')
+          if (shell && sidebar) return resolve(true)
+          if (Date.now() > deadline) return resolve(false)
+          setTimeout(tick, 50)
+        }
+        tick()
+      })
+    })()
+  `)
+  if (!ready) throw new Error('reader did not render after sign-in')
+}
+
 it(
   'display pipeline sanitizes hostile HTML in a real browser',
   async () => {
   const view = new Bun.WebView({ width: 1100, height: 800 })
   try {
-    // Session through the same cookie-setting API the login form uses
-    // (avoids racing hydration with a native form submit).
-    await view.navigate(`${BASE}/login`)
-    const loginOk = await view.evaluate(`
-      fetch('/api/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }),
-      }).then((r) => r.ok)
-    `)
-    console.log('login ok:', loginOk)
+    await signIn(view)
     await view.navigate(`${BASE}/`)
-    await view.evaluate(`
-      fetch('/api/bootstrap', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ filter: {} }) })
-        .then(async (r) => { window.__diag = { status: r.status, body: (await r.text()).slice(0, 400) } })
-    `)
     // Wait for the entry card to fetch and sink its body.
     await view.evaluate(`
       (() => {
@@ -319,20 +377,6 @@ it(
       })()
     `)) as Record<string, unknown>
     console.log('pencil probe:', JSON.stringify(pencil))
-    await view.evaluate(`document.body.style.zoom = '3'`)
-    const png = await view.screenshot()
-    await Bun.write('/tmp/pi-safetynet/01a126c0-9633-76d0-bd69-c747032718a4/ui.png', png)
-    // force the hover-reveal pencil visible for the screenshot
-    await view.evaluate(`(() => {
-      const panel = document.querySelector('[data-testid="feed-panel"]')
-      panel.style.zoom = '2'
-      panel.scrollTop = 260
-      document.querySelectorAll('button[title="Rename feed"]').forEach((b) => (b.style.opacity = '1'))
-      document.querySelectorAll('[data-testid="feed-count"]').forEach((e) => (e.style.opacity = '0'))
-      return true
-    })()`)
-    const png2 = await view.screenshot()
-    await Bun.write('/tmp/pi-safetynet/01a126c0-9633-76d0-bd69-c747032718a4/ui-hover.png', png2)
     // Click the hover-pencil: the rename editor must take the cursor on appear.
     const renameFocus = (await view.evaluate(`
       (() => {
@@ -393,16 +437,8 @@ it(
   async () => {
     const view = new Bun.WebView({ width: 1100, height: 800 })
     try {
-      await view.navigate(`${BASE}/login`)
-      await view.evaluate(`
-        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
-      `)
+      await signIn(view)
       await view.navigate(`${BASE}/`)
-      await view.evaluate(`
-        fetch('/api/bootstrap', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ filter: {} }) }).then((r) => r.status)
-      `)
 
       const readState = (i: number): string =>
         `const a = document.querySelectorAll("article")[${i}]; return a && a.className.includes("bg-gray-50") ? "read" : "unread"`
@@ -477,16 +513,8 @@ it(
   async () => {
     const view = new Bun.WebView({ width: 1100, height: 800 })
     try {
-      await view.navigate(`${BASE}/login`)
-      await view.evaluate(`
-        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
-      `)
+      await signIn(view)
       await view.navigate(`${BASE}/`)
-      await view.evaluate(`
-        fetch('/api/bootstrap', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ filter: {} }) }).then((r) => r.status)
-      `)
       await view.evaluate(until('return document.querySelectorAll("article").length > 0 ? 1 : 0'))
 
       const href = (await view.evaluate(`
@@ -525,16 +553,7 @@ it(
 
     const view = new Bun.WebView({ width: 1100, height: 800 })
     try {
-      await view.navigate(`${BASE}/login`)
-      await view.evaluate(`
-        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
-      `)
-      // Does the server keep the view's feed in the sidebar payload?
-      const api = (await view.evaluate(`
-        fetch('/api/panel?feed=${feedId}').then((r) => r.json())
-          .then((j) => ({ feeds: j.feeds.map((f) => f.title) }))
-      `)) as { feeds: string[] }
+      await signIn(view)
 
       await view.navigate(`${BASE}/?feed=${feedId}`)
       // Wait for the CORRECT label (the id fallback renders first, so a
@@ -548,9 +567,13 @@ it(
       const finalLabel = (await view.evaluate(
         `(() => { const t = document.querySelector('[data-testid="feed-menu-trigger"]'); return t ? t.textContent.trim() : '' })()`,
       )) as string
-      console.log('sidebar feeds for the view:', JSON.stringify(api.feeds))
+      // The sidebar keeps the view's own feed even with nothing unread in it —
+      // the server is asked for the current feed for exactly this reason.
+      const sidebarText = (await view.evaluate(
+        `(() => { const p = document.querySelector('[data-testid="feed-panel"]'); return p ? p.textContent : '' })()`,
+      )) as string
       console.log('header label:', JSON.stringify(finalLabel), '| resolved:', JSON.stringify(label))
-      expect(api.feeds).toEqual(['Blog']) // the view's feed stays in the sidebar
+      expect(sidebarText).toContain('Blog')
       expect(finalLabel.startsWith('Blog')).toBe(true)
       expect(finalLabel.includes(feedId)).toBe(false)
     } finally {
@@ -566,11 +589,7 @@ it(
   async () => {
     const view = new Bun.WebView({ width: 1100, height: 800 })
     try {
-      await view.navigate(`${BASE}/login`)
-      await view.evaluate(`
-        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
-      `)
+      await signIn(view)
       // The previous test marks everything read, and the default view is
       // unread-only: restore the list so there are cards to expand.
       const handle = openDatabase(fixtureDbPath)
@@ -624,11 +643,7 @@ it(
 
     const view = new Bun.WebView({ width: 1100, height: 800 })
     try {
-      await view.navigate(`${BASE}/login`)
-      await view.evaluate(`
-        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
-      `)
+      await signIn(view)
       await view.navigate(`${BASE}/`)
       const order = (await view.evaluate(
         until(`
@@ -669,11 +684,7 @@ it(
 
     const view = new Bun.WebView({ width: 1100, height: 800 })
     try {
-      await view.navigate(`${BASE}/login`)
-      await view.evaluate(`
-        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
-      `)
+      await signIn(view)
       await view.navigate(`${BASE}/`)
       await view.evaluate(
         until(`return document.querySelectorAll('[data-entry-id]').length >= 100 ? 'ready' : ''`),
@@ -718,11 +729,7 @@ it(
       return true
     })()`
     try {
-      await view.navigate(`${BASE}/login`)
-      await view.evaluate(`
-        fetch('/api/login', { method: 'POST', headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: 'spiffy', password: 'correct-horse' }) }).then((r) => r.ok)
-      `)
+      await signIn(view)
       await view.navigate(`${BASE}/`)
 
       const before = (await view.evaluate(waitForLabel('View: expanded'))) as string

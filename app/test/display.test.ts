@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
 
-import { GLOBAL_ATTRS, POLICY, safeUrlProtocol, toDomPurifyConfig, toSanitizerConfig } from '../src/client/display/policy'
-import { usesAddImageTitle } from '../src/client/display/rewrites'
-import { parseYouTubeUrl } from '../src/client/display/youtube'
+import { GLOBAL_ATTRS, POLICY, safeUrlProtocol, toDomPurifyConfig, toSanitizerConfig } from '../src/lib/display/policy'
+import { usesAddImageTitle } from '../src/lib/display/rewrites'
+import { parseYouTubeUrl } from '../src/lib/display/youtube'
 
 test('YouTube URL shapes all resolve to one embed', () => {
   for (const url of [

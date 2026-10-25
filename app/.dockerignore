@@ -1,7 +1,6 @@
 # never ship these in an image (COPY ignores .gitignore!)
 node_modules
-build
-.svelte-kit
+dist
 data
 import-dump
 *.sqlite

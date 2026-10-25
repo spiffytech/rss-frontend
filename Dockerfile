@@ -1,4 +1,4 @@
-FROM oven/bun:1.4.2 AS base
+FROM oven/bun:1.4.4 AS base
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 # REAL NODE IS REQUIRED. oven/bun ships none -- the `node` on its PATH is

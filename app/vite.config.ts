@@ -1,27 +1,27 @@
-import adapter from '@sveltejs/adapter-bun'
-import { vitePreprocess } from '@sveltejs/vite-plugin-svelte'
-import tailwindcss from '@tailwindcss/vite'
-import { sveltekit } from '@sveltejs/kit/vite'
 import { defineConfig } from 'vite'
+import solid from '@solidjs/vite-plugin'
 
 export default defineConfig({
   plugins: [
-    tailwindcss(),
-    sveltekit({
-      adapter: adapter(),
-      preprocess: vitePreprocess(),
-      compilerOptions: {
-        runes: true,
+    solid({
+      ssr: true,
+      serverFunctions: true,
+      start: {
+        middleware: './src/middleware.ts',
       },
     }),
-    {
-      // bun: builtins (bun:sqlite …) must stay external in the server build —
-      // they resolve at runtime under Bun (adapter-bun), not Node's ESM loader.
-      name: 'externalize-bun-builtins',
-      enforce: 'pre' as const,
-      resolveId(id: string) {
-        return id.startsWith('bun:') ? { id, external: true } : null
-      },
-    },
   ],
+  server: {
+    port: 5173,
+  },
+  build: {
+    // Bun builtins are not node: builtins, so Vite will not externalize them on
+    // its own. Without this the SSR build tries to resolve `bun:sqlite`.
+    rolldownOptions: {
+      external: [/^bun(:|$)/],
+    },
+  },
+  ssr: {
+    external: ['bun', 'bun:sqlite'],
+  },
 })

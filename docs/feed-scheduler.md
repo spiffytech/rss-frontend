@@ -21,11 +21,32 @@
 >   committed target is replaced only by an earlier one" (origin floors may push
 >   back).
 > - Ops unchanged: same env names (`SCHEDULER_*`, with the `MINIFLUX_*`
->   overrides), `/health` 503 on a stale tick, `.scheduler-off` beside the DB
->   pauses it, `SCHEDULER_ENABLED=0` disables it.
+>   overrides), `/health/scheduler` 503 on a stale tick, `.scheduler-off`
+>   beside the DB pauses it, `SCHEDULER_ENABLED=0` disables it.
 
 Decides *when* each feed is fetched. Miniflux stays the fetcher, parser and
 store; we only write `feeds.next_check_at`. Not intended for upstream.
+
+## Health
+
+Two URLs, because they answer different questions:
+
+| URL | Question | 503 when |
+|---|---|---|
+| `/health` | should this container be restarted? | the database does not answer |
+| `/health/scheduler` | is the poller keeping up? | the last completed tick is older than `SCHEDULER_MAX_TICK_AGE_MINUTES`, or none ever completed |
+
+`/health` reports the scheduler in its body and sets `degraded` — a lagging
+poller is not a reason to restart a server that is serving, because the restart
+interrupts the work that is behind and a cold first tick on a large database
+takes minutes.
+
+The heartbeat is written to `.scheduler-heartbeat` beside the database (atomic
+temp+rename), not held in memory: the poller and the HTTP handler are different
+module graphs in production (`server.ts` imports `src/`; routes come from the
+bundled `dist/server/server.js`) and different processes in dev. In-memory
+state would read as "never ticked" from `/health`, which is exactly the alert
+you would not notice was broken.
 
 ## The control model
 
@@ -97,7 +118,7 @@ Read from the **same** env vars Miniflux reads, so the two cannot drift:
 | (floor is a constant, see above) | — |
 | learning window | `SCHEDULER_LEARNING_WINDOW_DAYS` (default 90) |
 | EMA half-life | `SCHEDULER_RATE_HALF_LIFE_DAYS` (default 7) |
-| `/health` staleness threshold | `SCHEDULER_MAX_TICK_AGE_MINUTES` (default 5) |
+| `/health/scheduler` staleness threshold | `SCHEDULER_MAX_TICK_AGE_MINUTES` (default 5) |
 | failing-feed probe ceiling | `SCHEDULER_FAILING_FEED_MAX_INTERVAL_MINUTES` (default 10080 = 7d) |
 | item-rate multiplier | `SCHEDULER_ENTRY_FREQUENCY_FACTOR` |
 

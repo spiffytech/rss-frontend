@@ -1,0 +1,263 @@
+'use server'
+
+/**
+ * Every read and every mutation the reader performs, as typed RPC.
+ *
+ * Two rules hold for this file:
+ *  - nothing is exported without `authed()` except the three session functions,
+ *    because `/_server` is a public endpoint;
+ *  - arguments are validated with zod, because a typed signature says nothing
+ *    about what the wire actually carried.
+ */
+import { and, eq, inArray } from 'drizzle-orm'
+import { z } from 'zod'
+
+import {
+  authed,
+  cookieJar,
+  guarded,
+  HttpError,
+  parse,
+  requestEvent,
+  SESSION_COOKIE,
+  sessionCookieOptions,
+  signSession,
+  verifyLogin,
+} from '../server/auth'
+import { appDb } from '../server/db-app'
+import { categories, feeds } from '../server/db/schema'
+import {
+  getAllFeedPrefs,
+  getUserPrefs,
+  markEntries,
+  setFeedPrefs,
+  setStarred as setStarredInDb,
+  setUserPrefs,
+  unsubscribeFeed,
+} from '../server/query/mutations'
+import { getEntryContent, panel as panelFromDb, queryView } from '../server/query/views'
+import { epochMs, type CategoryId, type EntryId, type FeedId } from '../shared/ids'
+import { zodEntriesFilter, type EntriesFilter } from '../shared/filter'
+import { DEFAULT_HIDE_EMPTY_FEEDS, resolveViewFilter, type FeedPrefs, type UserPrefs } from '../shared/prefs'
+
+const db = () => appDb().db
+
+// ---- Session (the only unauthenticated exports) ----
+
+export const login = guarded(async (username: string, password: string) => {
+  const parsed = parse(
+    z.object({ username: z.string().min(1), password: z.string().min(1) }),
+    { username, password },
+  )
+  const user = verifyLogin(appDb(), parsed.username, parsed.password)
+  if (!user) throw new HttpError(401, 'invalid credentials')
+  const event = requestEvent()
+  cookieJar().set(SESSION_COOKIE, signSession(user), sessionCookieOptions())
+  event.locals.user = user
+  return { authenticated: true as const, username: user.username }
+})
+
+export const logout = guarded(async () => {
+  cookieJar().delete(SESSION_COOKIE)
+  requestEvent().locals.user = null
+  return { authenticated: false as const }
+})
+
+// ---- Reads ----
+
+const cursorSchema = z
+  .object({
+    publishedAt: z.number(),
+    id: z.string(),
+    bucket: z.union([z.literal(0), z.literal(1)]).optional(),
+  })
+  .nullish()
+  .transform((cursor) =>
+    cursor ? { publishedAt: epochMs(cursor.publishedAt), id: cursor.id as EntryId, bucket: cursor.bucket } : null,
+  )
+
+/**
+ * One round trip for the reading view's first paint: entries, sidebar, and the
+ * per-feed prefs the controls need. The filter comes back resolved (this feed's
+ * saved sort/read-items folded in), so the rows on screen and the controls that
+ * claim to have produced them agree.
+ */
+export const bootstrap = authed(async ({ user }, filter: EntriesFilter) => {
+  const identity = parse(zodEntriesFilter, filter ?? {})
+  const handle = db()
+  const userPrefs = getUserPrefs(handle, user.id)
+  const feedPrefs = getAllFeedPrefs(handle, user.id)
+  const resolved = resolveViewFilter(identity, feedPrefs)
+  return {
+    ...queryView(handle, { userId: user.id, filter: resolved }),
+    ...panelFromDb(handle, {
+      userId: user.id,
+      hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+      currentFeed: (resolved.feedId as FeedId | undefined) ?? null,
+    }),
+    userPrefs,
+    feedPrefs,
+    filter: resolved,
+  }
+})
+
+/** Next window of the current view (keyset pagination). */
+export const entries = authed(
+  async ({ user }, filter: EntriesFilter, cursor: unknown) => {
+    const identity = parse(zodEntriesFilter, filter ?? {})
+    const at = parse(cursorSchema, cursor ?? null)
+    return queryView(db(), { userId: user.id, filter: identity, cursor: at })
+  },
+)
+
+/** Sidebar snapshot. `currentFeed` keeps the open feed named when the sidebar
+ *  hides feeds with no unread items. */
+export const panel = authed(async ({ user }, currentFeed: FeedId | null) => {
+  const handle = db()
+  return panelFromDb(handle, {
+    userId: user.id,
+    hideEmptyFeeds: getUserPrefs(handle, user.id).hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+    currentFeed: currentFeed ?? null,
+  })
+})
+
+/** One entry's body (raw HTML; the display pipeline runs client-side). */
+export const content = authed(async ({ user }, entryId: EntryId) => {
+  const found = getEntryContent(db(), { userId: user.id, entryId })
+  if (!found) throw new HttpError(404, 'entry not found')
+  return found
+})
+
+/**
+ * Kick a refresh for the current view's feeds.
+ *
+ * The old app's Refresh asked Miniflux to poll those feeds and returned
+ * immediately — Miniflux queued the work, so nothing was ever awaited. Ours
+ * marks the feeds due now and lets the scheduler take them on its next tick
+ * (≤60s). A freshly marked feed carries the earliest target, so a single-feed
+ * refresh sits at the head of the fetch queue rather than behind the backlog.
+ */
+export const refresh = authed(async ({ user }, filter: EntriesFilter) => {
+  const identity = parse(zodEntriesFilter, filter ?? {})
+  const handle = db()
+  const owned = handle
+    .select({ id: feeds.id, categoryId: feeds.categoryId })
+    .from(feeds)
+    .where(eq(feeds.userId, user.id))
+    .all()
+  const targets = owned.filter((feed) => {
+    if (identity.feedId) return feed.id === identity.feedId
+    if (identity.categoryId) return feed.categoryId === identity.categoryId
+    return true
+  })
+  if (targets.length === 0) return { queued: 0 }
+
+  handle
+    .update(feeds)
+    .set({ nextCheckAt: epochMs(Date.now()) })
+    .where(
+      and(
+        eq(feeds.userId, user.id),
+        inArray(
+          feeds.id,
+          targets.map((feed) => feed.id),
+        ),
+      ),
+    )
+    .run()
+  return { queued: targets.length }
+})
+
+// ---- Mutations ----
+
+const entryIds = z.array(z.string()).min(1).max(500)
+
+export const setStatus = authed(
+  async ({ user }, ids: unknown, status: 'read' | 'unread') => {
+    const parsed = parse(z.object({ ids: entryIds, status: z.enum(['read', 'unread']) }), {
+      ids,
+      status,
+    })
+    return {
+      changed: markEntries(db(), {
+        userId: user.id,
+        entryIds: parsed.ids as EntryId[],
+        status: parsed.status,
+      }),
+    }
+  },
+)
+
+export const setStarred = authed(async ({ user }, ids: unknown, starred: boolean) => {
+  const parsed = parse(z.object({ ids: entryIds, starred: z.boolean() }), { ids, starred })
+  return {
+    changed: setStarredInDb(db(), {
+      userId: user.id,
+      entryIds: parsed.ids as EntryId[],
+      starred: parsed.starred,
+    }),
+  }
+})
+
+const feedPatchSchema = z
+  .object({
+    viewMode: z.enum(['expanded', 'list']).optional(),
+    sort: z.enum(['oldest', 'newest']).optional(),
+    hideReadItems: z.boolean().optional(),
+  })
+  .strict()
+
+const userPatchSchema = z
+  .object({
+    hideEmptyFeeds: z.boolean().optional(),
+    disabledAutoReadFeeds: z.array(z.string()).optional(),
+  })
+  .strict()
+
+/** Per-feed view prefs (feedId given) or per-account prefs (omitted). */
+export const setPrefs = authed(
+  async ({ user }, feedId: FeedId | null, patch: Partial<FeedPrefs> | Partial<UserPrefs>) => {
+    const handle = db()
+    if (feedId) {
+      setFeedPrefs(handle, user.id, feedId, parse(feedPatchSchema, patch))
+    } else {
+      const prefs = parse(userPatchSchema, patch)
+      setUserPrefs(handle, user.id, {
+        hideEmptyFeeds: prefs.hideEmptyFeeds,
+        disabledAutoReadFeeds: prefs.disabledAutoReadFeeds?.map((id) => id as FeedId),
+      })
+    }
+    return { ok: true as const }
+  },
+)
+
+const titleSchema = z.string().min(1).max(500)
+
+export const renameFeed = authed(async ({ user }, feedId: FeedId, title: string) => {
+  const changed = db()
+    .update(feeds)
+    .set({ title: parse(titleSchema, title) })
+    .where(and(eq(feeds.id, feedId), eq(feeds.userId, user.id)))
+    .returning({ id: feeds.id })
+    .all()
+  if (changed.length === 0) throw new HttpError(404, 'feed not found')
+  return { ok: true as const }
+})
+
+export const renameCategory = authed(async ({ user }, categoryId: CategoryId, title: string) => {
+  const changed = db()
+    .update(categories)
+    .set({ title: parse(titleSchema, title) })
+    .where(and(eq(categories.id, categoryId), eq(categories.userId, user.id)))
+    .returning({ id: categories.id })
+    .all()
+  if (changed.length === 0) throw new HttpError(404, 'category not found')
+  return { ok: true as const }
+})
+
+export const unsubscribe = authed(async ({ user }, feedId: FeedId) => {
+  if (!unsubscribeFeed(appDb(), { userId: user.id, feedId })) {
+    throw new HttpError(404, 'feed not found')
+  }
+  return { ok: true as const }
+})
