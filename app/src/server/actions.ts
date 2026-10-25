@@ -82,22 +82,43 @@ const cursorSchema = z
  * saved sort/read-items folded in), so the rows on screen and the controls that
  * claim to have produced them agree.
  */
-export const bootstrap = authed(async ({ user }, filter: EntriesFilter) => {
-  const identity = parse(zodEntriesFilter, filter ?? {})
+/**
+ * The three reads the reader makes. Separate on purpose: each has its own
+ * lifecycle in the page (entries append, the panel is refreshed after writes,
+ * prefs change on toggle), so none of them can invalidate another.
+ */
+export const viewEntries = authed(
+  async ({ user }, filter: EntriesFilter, cursor: unknown, limit?: number) => {
+  const handle = db()
+  const feedPrefs = getAllFeedPrefs(handle, user.id)
+  const resolved = resolveViewFilter(parse(zodEntriesFilter, filter ?? {}), feedPrefs)
+  const at = parse(cursorSchema, cursor ?? null)
+  return {
+    ...queryView(handle, {
+      userId: user.id,
+      filter: resolved,
+      cursor: at,
+      limit: limit ?? undefined,
+    }),
+    filter: resolved,
+  }
+})
+
+export const viewPanel = authed(async ({ user }, currentFeed: FeedId | null) => {
   const handle = db()
   const userPrefs = getUserPrefs(handle, user.id)
-  const feedPrefs = getAllFeedPrefs(handle, user.id)
-  const resolved = resolveViewFilter(identity, feedPrefs)
+  return panelFromDb(handle, {
+    userId: user.id,
+    hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+    currentFeed: currentFeed ?? null,
+  })
+})
+
+export const viewPrefs = authed(async ({ user }) => {
+  const handle = db()
   return {
-    ...queryView(handle, { userId: user.id, filter: resolved }),
-    ...panelFromDb(handle, {
-      userId: user.id,
-      hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
-      currentFeed: (resolved.feedId as FeedId | undefined) ?? null,
-    }),
-    userPrefs,
-    feedPrefs,
-    filter: resolved,
+    userPrefs: getUserPrefs(handle, user.id),
+    feedPrefs: getAllFeedPrefs(handle, user.id),
   }
 })
 

@@ -1,4 +1,4 @@
-import { For, Show } from 'solid-js'
+import { For, Show, onSettled } from 'solid-js'
 
 import { EntryItem } from './EntryItem'
 import { observeSentinel } from '../lib/observers'
@@ -26,7 +26,12 @@ export const EntryList = () => {
       <div
         id="entry-sentinel"
         class={['h-1 w-full', { hidden: r.session.loadingMore }]}
-        ref={(element) => observeSentinel(element, onSentinel)}
+        ref={(element) => {
+          // Observe after mount, not in the ref: a ref runs before the element is
+          // in the document, so looking up the scroll root there finds nothing
+          // and the sentinel never intersects.
+          onSettled(() => observeSentinel(element, onSentinel))
+        }}
       />
     </div>
   )

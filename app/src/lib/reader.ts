@@ -1,37 +1,33 @@
 /**
  * Reader state, per page render.
  *
- * Two stores, split by *provenance*, which is the whole design:
+ * Three independent reads, one small session store. Nothing here mirrors the
+ * database: entries, the sidebar and prefs each have a lifecycle of their own, so
+ * a page appended, an entry marked read or a panel refetch never invalidates the
+ * others.
  *
- *  - **`data`** is a projection (`createOptimisticStore`) over
- *    `api.bootstrap(filter)`. It is the server's answer, it is re-asked whenever
- *    we are unsure (`refresh(data)`), and it is the only place entries, the
- *    sidebar, prefs and the resolved filter come from. Because the framework
- *    owns its lifecycle it is created per render, awaits during SSR, and can
- *    never be written from inside a computation by hand.
- *  - **`session`** is a plain store of things a server has no opinion about:
- *    where you were reading, what you expanded, whether you have scrolled this
- *    list yet. Written only from client events.
- *
- * Failure policy is one line long and applies everywhere: patch optimistically,
- * call the server, and `refresh(data)` **only if the call failed** — the server
- * is the source of truth, so being wrong is corrected by re-asking, not by
- * hand-written compensating logic. A successful write is left alone, because a
- * refresh would also reset the paged window the reader is standing on.
+ *  - `page` — a projection keyed on the URL filter. Its seed is page one;
+ *    `loadMore` appends to it. Re-runs (and therefore resets) only when the
+ *    filter changes, which is exactly when the list should reset.
+ *  - `panelStore` — sidebar and counters, keyed on the current feed. Refreshed
+ *    after writes settle, so its latency is invisible.
+ *  - `prefsStore` — per-feed and per-account prefs; written on toggle.
+ *  - `session` — reading anchor, expansions, scroll flags, rename editor: things
+ *    no server has an opinion about, written only from client events.
  */
 import {
   action,
-  snapshot,
   createEffect,
   createMemo,
   createOptimisticStore,
   createStore,
   refresh,
+  snapshot,
 } from 'solid-js'
 
 import * as api from '../server/actions'
 import type { EntriesFilter } from '../shared/filter'
-import type { CategoryId, EntryId, FeedId } from '../shared/ids'
+import type { CategoryId, EntryId, EntryStatus, FeedId } from '../shared/ids'
 import {
   DEFAULT_HIDE_EMPTY_FEEDS,
   DEFAULT_HIDE_READ_ITEMS,
@@ -41,20 +37,18 @@ import {
   type UserPrefs,
 } from '../shared/prefs'
 import { shouldAutoRead } from '../shared/reading'
-import type { EntrySummary, FeedPanelResult, ViewCursor } from '../shared/types'
+import type {
+  EntriesResult,
+  EntrySummary,
+  FeedPanelResult,
+  ViewCursor,
+} from '../shared/types'
 import { compareTitlesCI, computeUnreadCount } from '../shared/util'
 
-/** Everything a server has an opinion about, for the current filter. */
-export type ReaderData = FeedPanelResult & {
-  entries: EntrySummary[]
-  nextCursor: ViewCursor | null
-  userPrefs: UserPrefs
-  feedPrefs: Record<FeedId, FeedPrefs>
-  /** The filter the server actually queried with (feed prefs folded in). */
-  filter: EntriesFilter
-}
+/** How long after a write burst the sidebar's counters are re-read. */
+const PANEL_SETTLE_MS = 300
+const POLL_MS = 60_000
 
-/** Everything only this tab knows. Never crosses the wire. */
 export type ReaderSession = {
   currentId: EntryId | null
   navRequest: EntryId | null
@@ -67,24 +61,37 @@ export type ReaderSession = {
   renameId: string | null
   renameKind: 'feed' | 'category' | null
   renameTitle: string
-  /** Keyset cursor for the *next* window; null = end of the view. */
-  cursor: ViewCursor | null
-  /** Windows fetched past the server's first one, in arrival order. */
-  extra: EntrySummary[]
   loadingMore: boolean
-  /** Bumped when the window is replaced, so observers can re-arm. */
+  /** Pages fetched past the first window, in arrival order. */
+  extra: EntrySummary[]
+  /** Cursor for the next appended page (page one's cursor lives in the projection). */
+  extraCursor: ViewCursor | null
+  /** Read state written locally and sent to the server. */
+  statusOverrides: Record<string, EntryStatus>
+  /** Favorites written locally and sent to the server. */
+  favoriteOverrides: Record<string, boolean>
+  /** Bumped when the list is replaced, so observers can re-arm. */
   pageGen: number
-  /** Read state the server has been told about but has not yet echoed back. */
-  statusOverrides: Record<string, 'read' | 'unread'>
 }
 
-const POLL_MS = 60_000
-
 export const createReader = (filter: () => EntriesFilter) => {
-  // ---- server truth ----
-  const [data, setData] = createOptimisticStore<ReaderData>(() => api.bootstrap(filter()), null)
+  // ---- the list ----
+  /** The feed the panel should keep visible, so its own name resolves. */
+  const currentFeedId = (): FeedId | null => (filter().feedId as FeedId | undefined) ?? null
 
-  // ---- client session ----
+  // ---- the sidebar ----
+  const [panelStore, setPanelStore] = createOptimisticStore<FeedPanelResult>(
+    () => api.viewPanel(currentFeedId()),
+    null,
+  )
+
+  // ---- prefs ----
+  const [prefsStore, setPrefsStore] = createOptimisticStore<{
+    userPrefs: UserPrefs
+    feedPrefs: Record<FeedId, FeedPrefs>
+  }>(() => api.viewPrefs(), null)
+
+  // ---- session ----
   const [session, setSession] = createStore<ReaderSession>({
     currentId: null,
     navRequest: null,
@@ -97,39 +104,49 @@ export const createReader = (filter: () => EntriesFilter) => {
     renameId: null,
     renameKind: null,
     renameTitle: '',
-    cursor: null,
-    extra: [],
     loadingMore: false,
-    pageGen: 0,
+    extra: [],
+    extraCursor: null,
     statusOverrides: {},
+    favoriteOverrides: {},
+    pageGen: 0,
   })
 
-  /** The visible window: the server's first page plus anything paged in. */
-  const entries = createMemo<EntrySummary[]>(() => {
-    const first = data.entries
-    const seen = new Set(first.map((entry) => entry.id))
-    const all = session.extra.length === 0 ? first : [...first, ...session.extra.filter((entry) => !seen.has(entry.id))]
-    // Apply the session's read-state overlay: what you just marked read shows as
-    // read immediately, without re-asking the server (and without making the
-    // projection re-derive, which would blank the list).
+  /** Page one for the current filter. */
+  const [page, setPage] = createOptimisticStore<EntriesResult & { filter: EntriesFilter }>(
+    () => api.viewEntries(filter(), null),
+    null,
+  )
+
+  /**
+   * The list: seeded by the read, appended to as you scroll.
+   *
+   * The projection beside it only ever answers "page one for this filter". The
+   * scrolling list is a plain store, because appended pages have to survive the
+   * projection re-deriving (an optimistic projection drops writes made outside a
+   * transition). One reset trigger — the filter — not "any data change".
+   */
+
+
+  const entries = (): EntrySummary[] => {
+    const first = page.entries
+    const rest = session.extra
+    const all = rest.length === 0 ? first : [...first, ...rest]
+    if (Object.keys(session.statusOverrides).length === 0) return all
     return all.map((entry) => {
-      const override = session.statusOverrides[entry.id]
-      return override && override !== entry.status ? { ...entry, status: override } : entry
+      const status = session.statusOverrides[entry.id]
+      return status && status !== entry.status ? { ...entry, status } : entry
     })
-  })
+  }
 
-  const nextCursor = () => session.cursor ?? data.nextCursor
+  const nextCursor = (): ViewCursor | null =>
+    session.extra.length > 0 ? session.extraCursor : page.nextCursor
 
-  // A new answer from the server replaces the window: drop the pages we appended
-  // and start paging again from its cursor. Runs for a navigation *and* for a
-  // refresh after a write, which is what "server wins" means.
+  // A new filter means a new list: reset the reading session with it.
   createEffect(
-    () => [data.filter, data.entries] as const,
+    () => page.filter,
     () => {
       setSession((draft) => {
-        draft.statusOverrides = {}
-        draft.extra = []
-        draft.cursor = null
         draft.currentId = null
         draft.navRequest = null
         draft.userHasScrolled = false
@@ -137,26 +154,28 @@ export const createReader = (filter: () => EntriesFilter) => {
         draft.expandedIds = []
         draft.viewModeOverride = null
         draft.pageGen++
+        draft.extra = []
+        draft.extraCursor = null
+        draft.statusOverrides = {}
+        draft.favoriteOverrides = {}
+        draft.loadingMore = false
       })
     },
   )
 
   // ---- derived ----
 
-  const currentFeedId = (): FeedId | null => (filter().feedId as FeedId | undefined) ?? null
-
   const effectiveViewMode = (): 'expanded' | 'list' =>
     session.viewModeOverride ??
-    (currentFeedId() ? data.feedPrefs[currentFeedId()!]?.viewMode : undefined) ??
+    (currentFeedId() ? prefsStore.feedPrefs[currentFeedId()!]?.viewMode : undefined) ??
     DEFAULT_VIEW_MODE
 
   const currentTitle = (): string => {
     const active = filter()
     if (active.feedId) {
-      // The sidebar hides feeds with nothing unread; the projection carries the
-      // whole catalog (`allFeeds`), so the name is always available — no cache,
-      // no `Feed <uuid>` fallback.
-      const feed = data.allFeeds.find((candidate) => candidate.id === active.feedId)
+      // `allFeeds` is every feed, so the name resolves even when the sidebar
+      // hides it for having nothing unread.
+      const feed = panelStore.allFeeds.find((candidate) => candidate.id === active.feedId)
       return feed?.title ?? 'Feed'
     }
     if (active.starred) return 'Starred'
@@ -166,61 +185,66 @@ export const createReader = (filter: () => EntriesFilter) => {
   const unreadCount = (): number | null => {
     const active = filter()
     if (!active.feedId && !active.categoryId && !active.starred && !active.search) return null
-    return computeUnreadCount(active, data.feeds, data.counters)
+    return computeUnreadCount(active, panelStore.feeds, panelStore.counters)
   }
 
   const favoriteFeeds = () =>
-    data.allFeeds
-      .filter((feed) => data.feedPrefs[feed.id]?.favorite === true)
+    panelStore.allFeeds
+      .filter((feed) => isFavorite(feed.id))
       .sort((a, b) => compareTitlesCI(a.title, b.title))
 
   const favoriteFeedsWithUnread = () =>
-    favoriteFeeds().filter((feed) => (data.counters[feed.id] ?? 0) > 0)
+    favoriteFeeds().filter((feed) => (panelStore.counters[feed.id] ?? 0) > 0)
 
-  const isFavorite = (feedId: FeedId): boolean => data.feedPrefs[feedId]?.favorite === true
+  const isFavorite = (feedId: FeedId): boolean => {
+    const local = session.favoriteOverrides[feedId]
+    return local ?? prefsStore.feedPrefs[feedId]?.favorite === true
+  }
 
-  // ---- read state: local, batched, corrected by the server ----
+  // ---- read state: immediate, one call per entry ----
 
-  /** Patch read state for an entry wherever it lives: window, page or overlay. */
-  const patchStatus = (entryId: EntryId, status: 'read' | 'unread'): void => {
-    const entry = entries().find((candidate) => candidate.id === entryId)
-    if (!entry || entry.status === status) return
+  /** Re-read the sidebar shortly after a burst of writes, not once per write. */
+  let panelTimer: ReturnType<typeof setTimeout> | undefined
+  const settlePanel = (): void => {
+    clearTimeout(panelTimer)
+    panelTimer = setTimeout(() => refresh(panelStore), PANEL_SETTLE_MS)
+  }
+
+  const patchStatus = (entryId: EntryId, status: EntryStatus): void => {
     setSession((draft) => {
       draft.statusOverrides[entryId] = status
     })
   }
 
-  /** Unread count with this session's pending read-state applied. */
+  /** Unread count with this session's read state applied. */
   const counterFor = (feedId: FeedId): number => {
-    const base = data.counters[feedId] ?? 0
-    let delta = 0
+    let total = panelStore.counters[feedId] ?? 0
     for (const [entryId, status] of Object.entries(session.statusOverrides)) {
-      const entry =
-        data.entries.find((candidate) => candidate.id === entryId) ??
-        session.extra.find((candidate) => candidate.id === entryId)
-      if (!entry || entry.feedId !== feedId) continue
-      if (entry.status === status) continue
-      delta += status === 'read' ? -1 : 1
+      const entry = entries().find((candidate) => candidate.id === entryId)
+      if (!entry || entry.feedId !== feedId || entry.status === status) continue
+      total += status === 'read' ? -1 : 1
     }
-    return Math.max(0, base + delta)
+    return Math.max(0, total)
   }
 
   /**
-   * Set read state: one optimistic write, one server call, in one transition.
+   * Mark entries read (or unread): write, call, done.
    *
-   * The write and the call must live in the same action — that is what makes a
-   * failure revert by itself, with no compensating logic here.
+   * Deliberately not wrapped in `action`: these writes belong to the list store,
+   * not to a transition. A failed call is corrected by re-reading page one and
+   * the panel — the server replaces our answer, which is the only revert needed.
    */
   const setStatus = (entryIds: EntryId[], status: 'read' | 'unread'): void => {
     if (entryIds.length === 0) return
-    action(function* () {
-      for (const entryId of entryIds) patchStatus(entryId, status)
-      yield api.setStatus(entryIds, status)
-    })()
-  }
-
-  const setLocalStatus = (entryId: EntryId, status: 'read' | 'unread'): void => {
-    setStatus([entryId], status)
+    for (const entryId of entryIds) patchStatus(entryId, status)
+    void api
+      .setStatus(entryIds, status)
+      .then(() => settlePanel())
+      .catch((error) => {
+        console.error('marking entries failed', error)
+        refresh(page)
+        refresh(panelStore)
+      })
   }
 
   const toggleRead = (entryId: EntryId): void => {
@@ -231,7 +255,7 @@ export const createReader = (filter: () => EntriesFilter) => {
       if (next === 'unread' && !draft.keepUnreadIds.includes(entryId)) draft.keepUnreadIds.push(entryId)
       if (next === 'read') draft.keepUnreadIds = draft.keepUnreadIds.filter((id) => id !== entryId)
     })
-    setLocalStatus(entryId, next)
+    setStatus([entryId], next)
   }
 
   const autoRead = (
@@ -242,24 +266,24 @@ export const createReader = (filter: () => EntriesFilter) => {
     // Never auto-read during a search — scrolling results shouldn't mark matches.
     if (filter().search) return
     const entry = entries().find((candidate) => candidate.id === entryId)
-    if (!entry) return
-    const prefs = currentFeedId() ? data.feedPrefs[currentFeedId()!] : undefined
+    if (!entry || entry.status === 'read') return
+    const prefs = currentFeedId() ? prefsStore.feedPrefs[currentFeedId()!] : undefined
     if (
       !shouldAutoRead({
         viewMode: session.viewModeOverride ?? prefs?.viewMode ?? DEFAULT_VIEW_MODE,
         userHasScrolled: viaScroll ? session.userHasScrolled : true,
-        disabledAutoReadFeeds: (data.userPrefs.disabledAutoReadFeeds ?? []) as FeedId[],
+        disabledAutoReadFeeds: (prefsStore.userPrefs.disabledAutoReadFeeds ?? []) as FeedId[],
         keepUnreadIds: session.keepUnreadIds,
         feedId: entry.feedId,
         entryId,
-        status: entry.status === 'read' ? 'read' : 'unread',
+        status: 'unread',
         ignoreFeedSetting: opts.ignoreFeedSetting,
         explicit: opts.explicit,
       })
     ) {
       return
     }
-    setLocalStatus(entryId, 'read')
+    setStatus([entryId], 'read')
   }
 
   const toggleExpanded = (entryId: EntryId): void => {
@@ -294,26 +318,19 @@ export const createReader = (filter: () => EntriesFilter) => {
   }
 
   const toggleStar = (entryId: EntryId): void => {
+    const entry = entries().find((candidate) => candidate.id === entryId)
+    if (!entry) return
+    const next = !entry.starred
     action(function* () {
-      const entry = entries().find((candidate) => candidate.id === entryId)
-      if (!entry) return
-      const next = !entry.starred
-      setData((draft) => {
-        const target = draft.entries.find((candidate) => candidate.id === entryId)
-        if (target) target.starred = next
-      })
-      setSession((draft) => {
-        const target = draft.extra.find((candidate) => candidate.id === entryId)
-        if (target) target.starred = next
-      })
+      // Star is server-owned; re-read page one rather than mirroring it here.
+      void api.setStarred([entryId], next).then(() => refresh(page))
       yield api.setStarred([entryId], next)
-      // No refresh on success: it would reset the window the reader is standing
-      // on. A throw above reverts the optimistic write on its own.
     })()
   }
 
-  // ---- pagination ----
+  // ---- pagination: append into the same list ----
 
+  /** Scroll further: append the next window to the list. */
   const loadMore = async (): Promise<void> => {
     if (session.loadingMore) return
     setSession((draft) => {
@@ -323,12 +340,12 @@ export const createReader = (filter: () => EntriesFilter) => {
       for (let attempt = 0; attempt < 5; attempt++) {
         const cursor = nextCursor()
         if (!cursor) return
-        const result = await api.entries(snapshot(data.filter), cursor)
+        const result = await api.entries(snapshot(page.filter), snapshot(cursor))
         const seen = new Set(entries().map((entry) => entry.id))
         const fresh = result.entries.filter((entry) => !seen.has(entry.id))
         setSession((draft) => {
-          if (fresh.length > 0) draft.extra.push(...fresh)
-          draft.cursor = result.nextCursor
+          if (fresh.length > 0) draft.extra.push(...snapshot(fresh))
+          draft.extraCursor = result.nextCursor
         })
         if (fresh.length > 0 || !result.nextCursor) return
       }
@@ -340,29 +357,29 @@ export const createReader = (filter: () => EntriesFilter) => {
   }
 
   /**
-   * End-of-list recheck: ask for anything beyond the loaded tail and append it in
-   * place. Skipped for search views (their cursor can't be rebuilt from one
-   * entry) and for newest-first (late arrivals belong at the top).
+   * End-of-list recheck: append anything beyond the loaded tail, in place.
+   * Skipped for search views (their cursor can't be rebuilt from one entry) and
+   * for newest-first (late arrivals belong at the top).
    */
   const checkTail = async (): Promise<void> => {
     if (nextCursor() || session.loadingMore) return
     const all = entries()
     if (all.length === 0) return
-    if (data.filter.search || data.filter.sort === 'newest') return
+    if (page.filter.search || page.filter.sort === 'newest') return
     const tail = all[all.length - 1]!
     setSession((draft) => {
       draft.loadingMore = true
     })
     try {
-      const result = await api.entries(snapshot(data.filter), {
+      const result = await api.entries(snapshot(page.filter), {
         publishedAt: tail.publishedAt,
         id: tail.id,
       })
       const seen = new Set(entries().map((entry) => entry.id))
       const fresh = result.entries.filter((entry) => !seen.has(entry.id))
       setSession((draft) => {
-        if (fresh.length > 0) draft.extra.push(...fresh)
-        draft.cursor = result.nextCursor
+        if (fresh.length > 0) draft.extra.push(...snapshot(fresh))
+        draft.extraCursor = result.nextCursor
       })
     } finally {
       setSession((draft) => {
@@ -374,8 +391,9 @@ export const createReader = (filter: () => EntriesFilter) => {
   // ---- writes that change the view ----
 
   const refreshFeeds = async (): Promise<void> => {
-    await api.refresh(snapshot(data.filter))
-    refresh(data)
+    await api.refresh(snapshot(page.filter))
+    refresh(page)
+    refresh(panelStore)
   }
 
   const setViewMode = (viewMode: 'expanded' | 'list'): void => {
@@ -384,68 +402,62 @@ export const createReader = (filter: () => EntriesFilter) => {
     })
     const feedId = currentFeedId()
     if (feedId) {
-      setData((draft) => {
-        draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], viewMode }
-      })
-      void api.setPrefs(feedId, { viewMode }).catch(() => refresh(data))
+      void api.setPrefs(feedId, { viewMode }).then(() => refresh(prefsStore))
     }
   }
 
   const setSort = (sort: 'oldest' | 'newest'): void => {
     const feedId = currentFeedId()
-    if (feedId) {
-      setData((draft) => {
-        draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], sort }
-      })
-    }
-    void api.setPrefs(feedId, { sort }).catch(() => refresh(data))
-    // The order is the server's business.
-    refresh(data)
+    if (!feedId) return
+    void api.setPrefs(feedId, { sort }).then(() => {
+      refresh(prefsStore)
+      // The order is the server's; re-ask for page one.
+      refresh(page)
+    })
   }
 
   const setHideReadItems = (hideReadItems: boolean): void => {
     const feedId = currentFeedId()
-    if (feedId) {
-      setData((draft) => {
-        draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], hideReadItems }
-      })
-    }
-    void api.setPrefs(feedId, { hideReadItems }).catch(() => refresh(data))
-    refresh(data)
+    if (!feedId) return
+    void api.setPrefs(feedId, { hideReadItems }).then(() => {
+      refresh(prefsStore)
+      refresh(page)
+    })
   }
 
   const toggleHideEmptyFeeds = async (): Promise<void> => {
-    const next = !(data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
+    const next = !(prefsStore.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
     try {
       await api.setPrefs(null, { hideEmptyFeeds: next })
     } catch {
       return
     }
-    refresh(data)
+    refresh(prefsStore)
+    refresh(panelStore)
   }
 
   const toggleAutoRead = async (feedId: FeedId): Promise<void> => {
-    const list = data.userPrefs.disabledAutoReadFeeds ?? []
+    const list = prefsStore.userPrefs.disabledAutoReadFeeds ?? []
     const next = list.includes(feedId) ? list.filter((id) => id !== feedId) : [...list, feedId]
     try {
       await api.setPrefs(null, { disabledAutoReadFeeds: next })
     } catch {
       return
     }
-    setData((draft) => {
-      draft.userPrefs = { ...draft.userPrefs, disabledAutoReadFeeds: next }
-    })
+    refresh(prefsStore)
   }
 
   const toggleFavorite = async (feedId: FeedId): Promise<void> => {
     const next = !isFavorite(feedId)
-    setData((draft) => {
-      draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], favorite: next }
+    setSession((draft) => {
+      draft.favoriteOverrides[feedId] = next
     })
     try {
       await api.setPrefs(feedId, { favorite: next })
     } catch (error) {
-      refresh(data)
+      setSession((draft) => {
+        delete draft.favoriteOverrides[feedId]
+      })
       throw error
     }
   }
@@ -474,12 +486,13 @@ export const createReader = (filter: () => EntriesFilter) => {
     if (kind === 'feed') await api.renameFeed(id as FeedId, title)
     else await api.renameCategory(id as CategoryId, title)
     cancelRename()
-    refresh(data)
+    refresh(panelStore)
   }
 
   const unsubscribe = async (feedId: FeedId): Promise<void> => {
     await api.unsubscribe(feedId)
-    refresh(data)
+    refresh(panelStore)
+    refresh(page)
   }
 
   const markIconFailed = (feedId: FeedId): void => {
@@ -488,9 +501,9 @@ export const createReader = (filter: () => EntriesFilter) => {
     })
   }
 
-  /** Sidebar + favorites, refreshed in place when a pref or rename changes it. */
+  /** Re-read the sidebar (after a pref or rename that changes it). */
   const refreshPanel = (): void => {
-    refresh(data)
+    refresh(panelStore)
   }
 
   // ---- idle refresh: keep the sidebar honest while the page sits open ----
@@ -507,7 +520,7 @@ export const createReader = (filter: () => EntriesFilter) => {
     pollTimer = setInterval(() => {
       void (async () => {
         try {
-          refresh(data)
+          refresh(panelStore)
           if (session.atListEnd) await checkTail()
         } catch (error) {
           console.error('idle refresh failed', error)
@@ -517,14 +530,22 @@ export const createReader = (filter: () => EntriesFilter) => {
     return stopIdleRefresh
   }
 
+  /** True while a read is in flight for the list (drives the dim, not a skeleton). */
+  const listFilter = createMemo(() => page.filter)
+
   return {
-    data,
-    setData,
-    session,
-    setSession,
     entries,
     counterFor,
     nextCursor,
+    listFilter,
+    filter,
+    page,
+    panel: panelStore,
+    setPanelStore,
+    prefs: prefsStore,
+    setPrefsStore,
+    session,
+    setSession,
     currentTitle,
     unreadCount,
     effectiveViewMode,
@@ -537,8 +558,8 @@ export const createReader = (filter: () => EntriesFilter) => {
     autoRead,
     moveAndRead,
     markDisplayed,
-    toggleStar,
     setStatus,
+    toggleStar,
     loadMore,
     checkTail,
     refreshFeeds,

@@ -27,7 +27,7 @@ export const FeedPanel = () => {
   // SQLite's binary collation order, which puts every capital letter first).
   const feedsByCategory = createMemo(() => {
     const map = new Map<string, FeedInfo[]>()
-    const sorted = [...r.data.feeds].sort((a, b) => compareTitlesCI(a.title, b.title))
+    const sorted = [...r.panel.feeds].sort((a, b) => compareTitlesCI(a.title, b.title))
     for (const feed of sorted) {
       const list = map.get(feed.categoryId) ?? []
       list.push(feed)
@@ -37,7 +37,7 @@ export const FeedPanel = () => {
   })
 
   const sortedCategories = createMemo(() =>
-    [...r.data.categories].sort((a, b) => compareTitlesCI(a.title, b.title)),
+    [...r.panel.categories].sort((a, b) => compareTitlesCI(a.title, b.title)),
   )
 
   /** Identity-only nav URL (which feed/category/section). */
@@ -50,18 +50,18 @@ export const FeedPanel = () => {
     return queryString ? `/?${queryString}` : '/'
   }
 
-  const isActiveFeed = (feedId: string) => r.data.filter.feedId === feedId
+  const isActiveFeed = (feedId: string) => r.filter().feedId === feedId
   const isRenamingFeed = (feedId: string) =>
     r.session.renameId === feedId && r.session.renameKind === 'feed'
   const isRenamingCategory = (categoryId: string) =>
     r.session.renameId === categoryId && r.session.renameKind === 'category'
 
-  const hideEmptyFeeds = () => r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS
+  const hideEmptyFeeds = () => r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS
 
   const showCategory = (catFeeds: FeedInfo[]): boolean => {
     if (!hideEmptyFeeds()) return true
     const hasUnread = catFeeds.some((feed) => (r.counterFor(feed.id)) > 0)
-    const hasActive = catFeeds.some((feed) => r.data.filter.feedId === feed.id)
+    const hasActive = catFeeds.some((feed) => r.filter().feedId === feed.id)
     return hasUnread || hasActive
   }
 
@@ -112,7 +112,7 @@ export const FeedPanel = () => {
               href={link({ starred: 1 })}
               class={[
                 'w-full text-left px-2 py-1 rounded hover:bg-gray-100 flex justify-between items-center',
-                { 'bg-gray-100': r.data.filter.starred === true },
+                { 'bg-gray-100': r.filter().starred === true },
               ]}
             >
               <span>Starred</span>
@@ -206,7 +206,7 @@ export const FeedPanel = () => {
                             <Show when={feed.parsingErrorCount > 0}>
                               <span title="Fetch errors">⚠️</span>
                             </Show>
-                            <Show when={r.data.feedPrefs[feed.id]?.favorite === true}>
+                            <Show when={r.isFavorite(feed.id)}>
                               <span
                                 data-testid="feed-favorite"
                                 title="On the home page"

@@ -205,7 +205,9 @@ export const ReaderPage = () => {
       >
         {/* Reading the projection is what suspends; with renderMode 'async' the
             server awaits it, so the document arrives with rows and the title. */}
-        <Show when={r.data}>
+        {/* The components below read the three projections; their first read is
+            what the boundary awaits (and what 'async' makes the server wait for).
+            No wrapper `Show`: re-reading a projection must not re-suspend. */}
           <div class="grid grid-rows-[auto_1fr] app-container flex-1 min-h-0">
             <TopToolbar
               onToggleSidebar={() => setSidebarOpen(!sidebarOpen())}
@@ -268,7 +270,6 @@ export const ReaderPage = () => {
               </div>
             </div>
           </div>
-        </Show>
       </Loading>
     </ReaderContext>
   );

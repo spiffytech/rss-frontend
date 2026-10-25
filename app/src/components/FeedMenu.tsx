@@ -45,13 +45,13 @@ export const FeedMenu = () => {
   let panelEl: HTMLDialogElement | undefined;
   const [open, setOpen] = createSignal(false);
 
-  const feedId = () => r.data.filter.feedId;
+  const feedId = () => r.filter().feedId;
   // Rename/unsubscribe/sort/auto-read only mean something for one feed — Latest,
   // Starred and category views are aggregates.
   const isFeedView = () => feedId() != null && feedId() !== "";
-  const searchActive = () => Boolean(r.data.filter.search);
+  const searchActive = () => Boolean(r.filter().search);
   const autoReadOff = () =>
-    (r.data.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
+    (r.prefs.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
 
   const [renameOpen, setRenameOpen] = createSignal(false);
   const [renameTitle, setRenameTitle] = createSignal("");
@@ -151,11 +151,11 @@ export const FeedMenu = () => {
   const onViewMode = () =>
     runAndClose(() => setViewMode(effectiveViewMode() === "expanded" ? "list" : "expanded"));
   const onSort = () =>
-    runAndClose(() => setSort((r.data.filter.sort ?? "oldest") === "newest" ? "oldest" : "newest"));
+    runAndClose(() => setSort((r.filter().sort ?? "oldest") === "newest" ? "oldest" : "newest"));
   const onToggleAutoRead = () => runAndClose(() => toggleAutoRead(feedId() as FeedId));
   const onHideEmptyFeeds = () => runAndClose(() => toggleHideEmptyFeeds());
   const onHideReadItems = () =>
-    runAndClose(() => setHideReadItems(!(r.data.filter.hideReadItems ?? true)));
+    runAndClose(() => setHideReadItems(!(r.filter().hideReadItems ?? true)));
   const onClearSearch = () => runAndClose(() => search.clearSearch());
 
   const startRenameEditor = (): void => {
@@ -232,8 +232,8 @@ export const FeedMenu = () => {
           </span>
         </Show>
         <Show when={searchActive()}>
-          <span class="shrink-0 max-w-24 truncate text-xs text-muted" title={r.data.filter.search}>
-            &#128269; {r.data.filter.search}
+          <span class="shrink-0 max-w-24 truncate text-xs text-muted" title={r.filter().search}>
+            &#128269; {r.filter().search}
           </span>
         </Show>
         <span class="shrink-0 text-xs text-muted" aria-hidden="true">
@@ -297,7 +297,7 @@ export const FeedMenu = () => {
                 <Show when={isFeedView() && !searchActive()}>
                   <button type="button" class="menu-row" onClick={onSort}>
                     Sort:{" "}
-                    {(r.data.filter.sort ?? "oldest") === "oldest"
+                    {(r.filter().sort ?? "oldest") === "oldest"
                       ? "oldest first"
                       : "newest first"}
                   </button>
@@ -317,27 +317,27 @@ export const FeedMenu = () => {
                   class={[
                     "menu-row",
                     {
-                      [TOGGLE_ON]: r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+                      [TOGGLE_ON]: r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
                     },
                   ]}
                   aria-pressed={
-                    (r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? "true" : "false"
+                    (r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? "true" : "false"
                   }
                   onClick={onHideEmptyFeeds}
                 >
                   Empty feeds:{" "}
-                  {(r.data.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
+                  {(r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
                     ? "hidden"
                     : "shown"}
                 </button>
                 <Show when={!searchActive()}>
                   <button
                     type="button"
-                    class={["menu-row", { [TOGGLE_ON]: r.data.filter.hideReadItems ?? true }]}
-                    aria-pressed={(r.data.filter.hideReadItems ?? true) ? "true" : "false"}
+                    class={["menu-row", { [TOGGLE_ON]: r.filter().hideReadItems ?? true }]}
+                    aria-pressed={(r.filter().hideReadItems ?? true) ? "true" : "false"}
                     onClick={onHideReadItems}
                   >
-                    Read items: {(r.data.filter.hideReadItems ?? true) ? "hidden" : "shown"}
+                    Read items: {(r.filter().hideReadItems ?? true) ? "hidden" : "shown"}
                   </button>
                 </Show>
               </div>

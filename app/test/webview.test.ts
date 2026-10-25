@@ -519,7 +519,9 @@ it("reading behaviours: windowing, auto-read on scroll, and click semantics", as
         })()
       `)) as number;
     const articles = (await view.evaluate(
-      until('const n = document.querySelectorAll("article").length; return n >= 120 ? n : 0'),
+      // More than the first window: the exact total depends on how many of the
+      // fixture rows earlier tests left unread, so assert the paging, not 120.
+      until('const n = document.querySelectorAll("article").length; return n > 100 ? n : 0'),
     )) as number;
     console.log("scrolled to sentinel:", scrolled, "| windowed articles:", articles);
     expect(articles).toBeGreaterThan(100);
@@ -689,8 +691,9 @@ it("home lists favorited feeds and nothing else", async () => {
     expect(home!.hasLatest).toBe(false); // the old aggregate is gone
     expect(home!.hasStarred).toBe(true);
 
-    // Favorite the feed from its own menu.
-    await view.click('[data-testid="feed-panel"] a[href*="?feed="]');
+    // Favorite the feed from its own menu. Open the feed first and let it load:
+    // the menu's per-feed rows depend on the view being the feed view.
+    await openFeedView(view);
     await view.click('[data-testid="feed-menu-trigger"]');
     const menuText = (await view.evaluate(
       `(() => { const d = document.getElementById('feed-menu'); return d ? d.textContent : '' })()`,

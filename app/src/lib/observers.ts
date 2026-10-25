@@ -139,7 +139,10 @@ export const trackEntry = (
  * initial mount report, so an under-filled viewport immediately pulls the next
  * window. The caller guards with `nextCursor && !loadingMore`.
  */
-export const observeSentinel = (node: HTMLElement, fire: () => Promise<void>): (() => void) => {
+export const observeSentinel = (
+  node: HTMLElement,
+  fire: () => void | Promise<void>,
+): (() => void) => {
   const sentinel = new IntersectionObserver(
     (batch) => {
       for (const item of batch) if (item.isIntersecting) void fire()

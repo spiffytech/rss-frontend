@@ -11,12 +11,12 @@ const DEBOUNCE_MS = 300
 
 export const createSearch = (r: Reader, onSearch: (term: string | undefined) => void) => {
   // Initial value only — the effect below keeps it in step with the filter.
-  const [text, setText] = createSignal(untrack(() => r.data.filter.search ?? ''))
+  const [text, setText] = createSignal(untrack(() => r.filter().search ?? ''))
   let timer: ReturnType<typeof setTimeout> | undefined
 
   // Navigating to another view clears the filter's search — the box clears with it.
   createEffect(
-    () => r.data.filter.search,
+    () => r.filter().search,
     (search) => {
       clearTimeout(timer)
       setText(search ?? '')
