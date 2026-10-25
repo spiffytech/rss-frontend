@@ -234,6 +234,42 @@ export const createReader = (filter: () => EntriesFilter) => {
    * not to a transition. A failed call is corrected by re-reading page one and
    * the panel — the server replaces our answer, which is the only revert needed.
    */
+  /**
+   * Re-read what is on screen after a write failed.
+   *
+   * The read asks with read items **included**, so the answer covers the same
+   * rows that are displayed however the failed write left them; and it only
+   * refreshes status, so nothing is removed from the list. Counters are the
+   * server's, so the panel is re-read too.
+   */
+  let resyncing: Promise<void> | undefined
+  const resyncDisplayed = (): Promise<void> => {
+    if (resyncing) return resyncing
+    resyncing = (async () => {
+      const shown = entries()
+      if (shown.length === 0) return
+      const filter = snapshot(page.filter)
+      const result = await api.viewEntries(
+        { ...filter, hideReadItems: false },
+        null,
+        shown.length + 20,
+      )
+      const server = new Map(result.entries.map((entry) => [entry.id, entry]))
+      setSession((draft) => {
+        for (const row of shown) {
+          const fresh = server.get(row.id)
+          // The server is the truth; the overlay is how it reaches a row that
+          // is already on screen.
+          if (fresh && fresh.status !== row.status) draft.statusOverrides[row.id] = fresh.status
+        }
+      })
+      refresh(panelStore)
+    })().finally(() => {
+      resyncing = undefined
+    })
+    return resyncing
+  }
+
   const setStatus = (entryIds: EntryId[], status: 'read' | 'unread'): void => {
     if (entryIds.length === 0) return
     for (const entryId of entryIds) patchStatus(entryId, status)
@@ -242,8 +278,14 @@ export const createReader = (filter: () => EntriesFilter) => {
       .then(() => settlePanel())
       .catch((error) => {
         console.error('marking entries failed', error)
-        refresh(page)
-        refresh(panelStore)
+        void resyncDisplayed().catch((resyncError) => {
+          // Last resort: drop the overlays so every row shows what the server
+          // last told us. Nothing leaves the screen.
+          console.error('re-reading the displayed entries failed', resyncError)
+          setSession((draft) => {
+            draft.statusOverrides = {}
+          })
+        })
       })
   }
 
@@ -559,6 +601,7 @@ export const createReader = (filter: () => EntriesFilter) => {
     moveAndRead,
     markDisplayed,
     setStatus,
+    resyncDisplayed,
     toggleStar,
     loadMore,
     checkTail,
