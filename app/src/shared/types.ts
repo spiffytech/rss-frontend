@@ -21,11 +21,12 @@ export type EntrySummary = {
   starred: boolean
   readingTime: number
   tags: string[]
-}
-
-/** Per-card fetch: the raw HTML body (display pipeline runs client-side). */
-export type EntryContent = {
-  id: EntryId
+  /**
+   * The raw HTML body. It travels with the row rather than in a request of its
+   * own: a page of a hundred averages 41 KB of bodies, less than the client
+   * bundle, so splitting it out bought nothing and cost 100 requests per view.
+   * The display pipeline still runs client-side (untrusted feed HTML).
+   */
   content: string
   commentsUrl: string | null
   language: string | null

@@ -7,7 +7,7 @@
 import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 
 import type { EntriesFilter } from '../../shared/filter'
-import type { CategoryCount, EntryContent, EntrySummary, FeedInfo, FeedPanelResult } from '../../shared/types'
+import type { CategoryCount, EntrySummary, FeedInfo, FeedPanelResult } from '../../shared/types'
 import { DEFAULT_HIDE_READ_ITEMS } from '../../shared/prefs'
 import type { CategoryId, EntryId, FeedId, UserId } from '../../shared/ids'
 import type { ReaderHandle } from '../db'
@@ -18,6 +18,29 @@ type Db = ReaderHandle['db']
 
 /** First window of a view; scrolling to the end fetches the next. */
 export const VIEW_PAGE_SIZE = 100
+
+/**
+ * The columns of an entry row, in one place: every read of an entry (a page of
+ * the view, the rows a write touched) answers with exactly this shape. The body
+ * is part of the row, so a page costs one request and one query.
+ */
+const entryColumns = {
+  id: entries.id,
+  feedId: entries.feedId,
+  feedTitle: feeds.title,
+  title: entries.title,
+  url: entries.url,
+  author: entries.author,
+  publishedAt: entries.publishedAt,
+  status: entries.status,
+  starred: entries.starred,
+  readingTime: entries.readingTime,
+  tags: entries.tags,
+  content: sql<string>`COALESCE(${entries.content}, '')`,
+  commentsUrl: entries.commentsUrl,
+  language: entries.language,
+  feedBaseUrl: sql<string | null>`COALESCE(${feeds.siteUrl}, ${feeds.feedUrl})` as SQL<string | null>,
+} as const
 
 /** Read rows sort after unread ones — the search view's primary key. */
 const bucketOf = () => sql`CASE WHEN ${entries.status} = 'read' THEN 1 ELSE 0 END`
@@ -88,19 +111,7 @@ export function queryView(
   }
   const limit = opts.limit ?? VIEW_PAGE_SIZE
   const rows = db
-    .select({
-      id: entries.id,
-      feedId: entries.feedId,
-      feedTitle: feeds.title,
-      title: entries.title,
-      url: entries.url,
-      author: entries.author,
-      publishedAt: entries.publishedAt,
-      status: entries.status,
-      starred: entries.starred,
-      readingTime: entries.readingTime,
-      tags: entries.tags,
-    })
+    .select(entryColumns)
     .from(entries)
     .innerJoin(feeds, eq(entries.feedId, feeds.id))
     .where(and(...where))
@@ -134,14 +145,7 @@ export function entriesByIds(
   if (opts.ids.length === 0) return []
   return db
     .select({
-      id: entries.id,
-      feedId: entries.feedId,
-      feedTitle: feeds.title,
-      title: entries.title,
-      url: entries.url,
-      author: entries.author,
-      publishedAt: entries.publishedAt,
-      status: entries.status,
+      ...entryColumns,
       starred: entries.starred,
       readingTime: entries.readingTime,
       tags: entries.tags,
@@ -156,23 +160,6 @@ export function entriesByIds(
       ),
     )
     .all()
-}
-
-/** Per-card body fetch (raw HTML — display transforms are client-side). */
-export function getEntryContent(db: Db, opts: { userId: UserId; entryId: EntryId }): EntryContent | null {
-  const row = db
-    .select({
-      id: entries.id,
-      content: entries.content,
-      commentsUrl: entries.commentsUrl,
-      language: entries.language,
-      feedBaseUrl: sql<string | null>`COALESCE(${feeds.siteUrl}, ${feeds.feedUrl})`,
-    })
-    .from(entries)
-    .innerJoin(feeds, eq(entries.feedId, feeds.id))
-    .where(and(eq(entries.id, opts.entryId), eq(entries.userId, opts.userId), sql`${entries.status} <> 'removed'`))
-    .get()
-  return row ?? null
 }
 
 /** Sidebar snapshot: feeds, categories with totals, and per-feed unread counts. */

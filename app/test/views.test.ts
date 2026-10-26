@@ -11,7 +11,7 @@ import {
   setStarred,
   setUserPrefs,
 } from '../src/server/query/mutations'
-import { getEntryContent, panel, queryView } from '../src/server/query/views'
+import { panel, queryView } from '../src/server/query/views'
 import { epochMs, newCategoryId, newEntryId, newFeedId, newUserId, type EntryId, type FeedId, type UserId } from '../src/shared/ids'
 import { resolveViewFilter } from '../src/shared/prefs'
 
@@ -143,11 +143,13 @@ test('markEntries touches exactly the passed ids and never removed rows', () => 
   expect(changedStub).toBe(0)
 })
 
-test('entry content loads per card (raw HTML)', () => {
+test('a page returns each row with its body', () => {
+  // One request, one query: the body is a column of the row, not a second call
+  // per card (a page of a hundred averages 41 KB of bodies).
   const { handle, userId } = setup()
   const [first] = view(handle.db, { userId, filter: {} })
-  const content = getEntryContent(handle.db, { userId, entryId: first!.id })
-  expect(content!.content).toBe('<p>first post</p>')
+  expect(first!.content).toBe('<p>first post</p>')
+  expect(first!.feedBaseUrl).toBeTruthy()
 })
 
 test("panel keeps the view's feed in the sidebar even with nothing unread", () => {

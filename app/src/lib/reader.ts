@@ -39,6 +39,8 @@ import { scrollToEntry } from './nav'
 
 /** One screenful; scrolling asks for another. */
 const PAGE_SIZE = 100
+/** How long read marks queue before they travel as one request. */
+const BATCH_MS = 250
 /** How long after a write burst the sidebar's counters are re-read. */
 const PANEL_SETTLE_MS = 300
 const POLL_MS = 60_000
@@ -273,27 +275,48 @@ export const createReader = (filter: () => EntriesFilter) => {
   }
 
   /**
-   * Mark entries read (or unread): optimistic, then the server's answer.
-   *
-   * The response carries the rows it wrote, so the list settles on the server's
-   * copy without re-reading the window — which is what keeps the scroll position
-   * and the appended pages intact.
+   * Read marks waiting to be sent. Scrolling marks entry after entry; each one is
+   * a UI fact immediately, but they travel as one request per burst — the same
+   * shape as a text editor autosaving what you typed.
    */
-  const setStatus = (entryIds: EntryId[], status: 'read' | 'unread'): void => {
-    if (entryIds.length === 0) return
-    void runWrite(status === 'read' ? 'mark that read' : 'mark that unread', async () => {
+  const pending = new Map<EntryId, 'read' | 'unread'>()
+  let flushTimer: ReturnType<typeof setTimeout> | undefined
+
+  const flushStatus = (): void => {
+    clearTimeout(flushTimer)
+    flushTimer = undefined
+    if (pending.size === 0) return
+    const reads: EntryId[] = []
+    const unreads: EntryId[] = []
+    for (const [id, status] of pending) (status === 'read' ? reads : unreads).push(id)
+    pending.clear()
+
+    void runWrite(reads.length > 0 ? 'mark that read' : 'mark that unread', async () => {
+      // The server answers with the rows it wrote, so the list settles on its copy
+      // without re-reading the window (which keeps scroll and appended pages).
       const rows = await action(function* () {
-        setPage((draft) => {
-          for (const entryId of entryIds) {
-            const entry = draft.entries.find((candidate) => candidate.id === entryId)
-            if (entry) entry.status = status
-          }
-        })
-        return snapshot(yield api.setStatus(entryIds, status))
+        return [
+          ...(reads.length > 0 ? snapshot(yield api.setStatus(reads, 'read')) : []),
+          ...(unreads.length > 0 ? snapshot(yield api.setStatus(unreads, 'unread')) : []),
+        ]
       })()
       confirm(rows)
       settlePanel()
     })
+  }
+
+  /** Mark entries read (or unread): visible at once, sent once per burst. */
+  const setStatus = (entryIds: EntryId[], status: 'read' | 'unread'): void => {
+    if (entryIds.length === 0) return
+    setPage((draft) => {
+      for (const entryId of entryIds) {
+        const entry = draft.entries.find((candidate) => candidate.id === entryId)
+        if (entry) entry.status = status
+      }
+    })
+    for (const entryId of entryIds) pending.set(entryId, status)
+    clearTimeout(flushTimer)
+    flushTimer = setTimeout(flushStatus, BATCH_MS)
   }
 
   const toggleRead = (entryId: EntryId): void => {
@@ -425,6 +448,8 @@ export const createReader = (filter: () => EntriesFilter) => {
   // projection's value: that would re-fire on every read and loop, because the
   // reset writes the projection's own inputs.
   createEffect(viewKey, () => {
+    // Marks queued for the view being left still belong to the server.
+    flushStatus()
     setSession((draft) => {
       draft.userHasScrolled = false
       // Write only what changes: a fresh `[]` invalidates the list's derive,

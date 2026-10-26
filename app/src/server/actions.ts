@@ -37,7 +37,6 @@ import {
 } from '../server/query/mutations'
 import {
   entriesByIds as entriesByIdsFromDb,
-  getEntryContent,
   panel as panelFromDb,
   queryView,
 } from '../server/query/views'
@@ -168,11 +167,6 @@ export const navigation = authed(async ({ user }) => {
 })
 
 /** One entry's body (raw HTML; the display pipeline runs client-side). */
-export const content = authed(async ({ user }, entryId: EntryId) => {
-  const found = getEntryContent(db(), { userId: user.id, entryId })
-  if (!found) throw new HttpError(404, 'entry not found')
-  return found
-})
 
 /**
  * Kick a refresh for the current view's feeds.
