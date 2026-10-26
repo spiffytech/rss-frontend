@@ -17,6 +17,12 @@ export const zodEntriesFilter = z.object({
   hideReadItems: z.boolean().optional(),
   /** Presentation order ('oldest' default; 'newest' reverses). */
   sort: z.enum(['oldest', 'newest']).optional(),
+  /**
+   * Entries to keep in the window even though they no longer match
+   * `hideReadItems`: what you have read since this view opened stays on screen
+   * until you navigate. Bounded so a long session cannot bloat the request.
+   */
+  keepIds: z.array(z.string()).max(500).optional(),
 })
 
 export type EntriesFilter = z.infer<typeof zodEntriesFilter>

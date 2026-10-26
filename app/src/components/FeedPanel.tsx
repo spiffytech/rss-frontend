@@ -60,7 +60,7 @@ export const FeedPanel = () => {
 
   const showCategory = (catFeeds: FeedInfo[]): boolean => {
     if (!hideEmptyFeeds()) return true
-    const hasUnread = catFeeds.some((feed) => (r.counterFor(feed.id)) > 0)
+    const hasUnread = catFeeds.some((feed) => (r.panel.counters[feed.id] ?? 0) > 0)
     const hasActive = catFeeds.some((feed) => r.filter().feedId === feed.id)
     return hasUnread || hasActive
   }
@@ -172,7 +172,7 @@ export const FeedPanel = () => {
                             {
                               hidden:
                                 hideEmptyFeeds() &&
-                                (r.counterFor(feed.id)) === 0 &&
+                                (r.panel.counters[feed.id] ?? 0) === 0 &&
                                 !isActiveFeed(feed.id),
                             },
                           ]}
@@ -219,7 +219,7 @@ export const FeedPanel = () => {
                               data-testid="feed-count"
                               class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0"
                             >
-                              {r.counterFor(feed.id)}
+                              {r.panel.counters[feed.id] ?? 0}
                             </span>
                             <button
                               type="button"

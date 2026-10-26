@@ -13,9 +13,10 @@ import { useReader } from '../lib/reader-context'
 export const EntryList = () => {
   const r = useReader()
   const { checkTail, loadMore } = r
+  const pageHasMore = () => r.page.nextCursor !== null
   // A fetch can be in flight when the sentinel reports again; the store guards
   // both paths with `loadingMore`.
-  const onSentinel = (): Promise<void> => (r.nextCursor() ? loadMore() : checkTail())
+  const onSentinel = (): void | Promise<void> => (pageHasMore() ? loadMore() : checkTail())
 
   return (
     <div data-testid="entry-list" class="flex flex-col gap-y-1 pb-[100dvh]">
@@ -25,7 +26,7 @@ export const EntryList = () => {
       <For each={r.entries()}>{(entry) => <EntryItem entry={entry} />}</For>
       <div
         id="entry-sentinel"
-        class={['h-1 w-full', { hidden: r.session.loadingMore }]}
+        class="h-1 w-full"
         ref={(element) => {
           // Observe after mount, not in the ref: a ref runs before the element is
           // in the document, so looking up the scroll root there finds nothing
