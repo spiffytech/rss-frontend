@@ -28,7 +28,7 @@ const PANEL_ID = "feed-menu";
  */
 export const FeedMenu = () => {
   const r = useReader()
-  const { currentTitle, effectiveViewMode, isFavorite, markDisplayed, refreshFeeds, refreshPanel, setHideReadItems, setSort, setViewMode, toggleAutoRead, toggleFavorite, toggleHideEmptyFeeds, unreadCount, unsubscribe } = r
+  const { cancelRename, currentTitle, effectiveViewMode, isFavorite, markDisplayed, refreshFeeds, saveRename, setHideReadItems, setRenameTitle, setSort, setViewMode, startRename, toggleAutoRead, toggleFavorite, toggleHideEmptyFeeds, unreadCount, unsubscribe } = r
   // A setting in its affirmative state (enabled, hidden) carries the accent
   // fill. This follows the row's own value, not the underlying boolean: blue on
   // "Auto-read: disabling" would read as a contradiction.
@@ -54,7 +54,6 @@ export const FeedMenu = () => {
     (r.prefs.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
 
   const [renameOpen, setRenameOpen] = createSignal(false);
-  const [renameTitle, setRenameTitle] = createSignal("");
 
   const title = createMemo(() => currentTitle());
   const unread = createMemo(() => unreadCount());
@@ -158,26 +157,25 @@ export const FeedMenu = () => {
     runAndClose(() => setHideReadItems(!(r.filter().hideReadItems ?? true)));
   const onClearSearch = () => runAndClose(() => search.clearSearch());
 
+  // The editor's text lives in the reader's session, so the sidebar and this
+  // popover rename through one implementation instead of two.
   const startRenameEditor = (): void => {
-    setRenameTitle(currentTitle());
+    startRename(feedId() as string, "feed", currentTitle());
     setRenameOpen(true);
   };
 
   const cancelRenameEditor = (): void => {
+    cancelRename();
     setRenameOpen(false);
-    setRenameTitle("");
   };
 
   const saveRenameEditor = async (): Promise<void> => {
-    const id = feedId();
-    const next = renameTitle().trim();
-    if (id == null || id === "" || !next) return;
-    await api.renameFeed(id as FeedId, next);
-    // Through the shared snapshot helper: keeps the active feed in the sidebar
-    // and refreshes the title cache the header falls back to.
-    await refreshPanel();
-    setRenameOpen(false);
-    closePanel();
+    try {
+      await saveRename();
+    } finally {
+      setRenameOpen(false);
+      closePanel();
+    }
   };
 
   const onRenameKeydown = (event: KeyboardEvent): void => {
@@ -394,7 +392,7 @@ export const FeedMenu = () => {
               type="text"
               ref={autofocus}
               class="w-full min-h-11 px-3 py-2 border border-line rounded-lg"
-              value={renameTitle()}
+              value={r.session.renameTitle}
               onInput={(event) => setRenameTitle(event.currentTarget.value)}
               onKeyDown={onRenameKeydown}
             />

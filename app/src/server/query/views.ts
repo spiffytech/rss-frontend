@@ -130,6 +130,44 @@ export function queryView(
   return { entries: page, nextCursor }
 }
 
+/**
+ * Re-read specific rows by id.
+ *
+ * The reader uses this to reconcile after a write: it costs one `id IN (…)`
+ * lookup for the rows that changed, instead of re-reading the whole window it is
+ * already showing.
+ */
+export function entriesByIds(
+  db: Db,
+  opts: { userId: UserId; ids: EntryId[] },
+): EntrySummary[] {
+  if (opts.ids.length === 0) return []
+  return db
+    .select({
+      id: entries.id,
+      feedId: entries.feedId,
+      feedTitle: feeds.title,
+      title: entries.title,
+      url: entries.url,
+      author: entries.author,
+      publishedAt: entries.publishedAt,
+      status: entries.status,
+      starred: entries.starred,
+      readingTime: entries.readingTime,
+      tags: entries.tags,
+    })
+    .from(entries)
+    .innerJoin(feeds, eq(entries.feedId, feeds.id))
+    .where(
+      and(
+        eq(entries.userId, opts.userId),
+        inArray(entries.id, opts.ids),
+        sql`${entries.status} <> 'removed'`,
+      ),
+    )
+    .all()
+}
+
 /** Per-card body fetch (raw HTML — display transforms are client-side). */
 export function getEntryContent(db: Db, opts: { userId: UserId; entryId: EntryId }): EntryContent | null {
   const row = db

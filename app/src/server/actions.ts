@@ -35,7 +35,12 @@ import {
   setUserPrefs,
   unsubscribeFeed,
 } from '../server/query/mutations'
-import { getEntryContent, panel as panelFromDb, queryView } from '../server/query/views'
+import {
+  entriesByIds as entriesByIdsFromDb,
+  getEntryContent,
+  panel as panelFromDb,
+  queryView,
+} from '../server/query/views'
 import { epochMs, type CategoryId, type EntryId, type FeedId } from '../shared/ids'
 import { zodEntriesFilter, type EntriesFilter } from '../shared/filter'
 import { DEFAULT_HIDE_EMPTY_FEEDS, resolveViewFilter, type FeedPrefs, type UserPrefs } from '../shared/prefs'
@@ -130,6 +135,12 @@ export const entries = authed(
     return queryView(db(), { userId: user.id, filter: identity, cursor: at })
   },
 )
+
+/** Re-read rows by id — the reader's reconciliation read after a write. */
+export const entriesByIds = authed(async ({ user }, ids: unknown) => {
+  const parsed = parse(z.object({ ids: z.array(z.string()).min(1).max(500) }), { ids })
+  return entriesByIdsFromDb(db(), { userId: user.id, ids: parsed.ids as EntryId[] })
+})
 
 /** Sidebar snapshot. `currentFeed` keeps the open feed named when the sidebar
  *  hides feeds with no unread items. */

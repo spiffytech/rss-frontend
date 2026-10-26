@@ -20,6 +20,7 @@ import {
   createEffect,
   createMemo,
   createOptimisticStore,
+  createSignal,
   createStore,
   refresh,
   snapshot,
@@ -40,16 +41,25 @@ import { shouldAutoRead } from '../shared/reading'
 
 /** The RPC boundary takes JSON: hand it plain data, never a store proxy. */
 const wire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-import type { EntriesResult, EntrySummary, FeedPanelResult } from '../shared/types'
+import type { EntriesResult, EntrySummary, FeedPanelResult, ViewCursor } from '../shared/types'
 import { compareTitlesCI, computeUnreadCount } from '../shared/util'
 
 /** One screenful; scrolling asks for another. */
 const PAGE_SIZE = 100
-/** How many ids the query keeps for rows read in this session. */
-const KEEP_LIMIT = 500
+/** How many written ids are kept for reconciliation. */
+const DIRTY_LIMIT = 500
 /** How long after a write burst the sidebar's counters are re-read. */
 const PANEL_SETTLE_MS = 300
 const POLL_MS = 60_000
+
+type ListState = {
+  entries: EntrySummary[]
+  nextCursor: ViewCursor | null
+  /** Which view these rows belong to; a different one starts over. */
+  viewKey: string
+  /** Which generation of that view; a bump means re-read from the top. */
+  gen: number
+}
 
 export type ReaderSession = {
   currentId: EntryId | null
@@ -63,12 +73,28 @@ export type ReaderSession = {
   renameId: string | null
   renameKind: 'feed' | 'category' | null
   renameTitle: string
-  /** Rows to ask for; grows as you scroll. */
-  windowSize: number
-  /** Rows this session has read, kept in the window by the query. */
-  keepIds: EntryId[]
+  /** Rows to hold; grows as you scroll. */
+  wanted: number
+  /** Rows this session wrote, reconciled on every read. */
+  dirtyIds: EntryId[]
+  /** Bumped to ask the list to start over from the newest row. */
+  listGen: number
   /** Bumped when the list is replaced, so observers can re-arm. */
   pageGen: number
+}
+
+/** A rejection's status, whether it arrives as a Response or a wrapped error. */
+const statusOf = (error: unknown): number | null => {
+  if (error instanceof Response) return error.status
+  const status = (error as { status?: unknown } | null)?.status
+  return typeof status === 'number' ? status : null
+}
+
+/** What to tell the reader when a write is rejected. */
+export const describeWriteFailure = (error: unknown, what: string): string => {
+  if (statusOf(error) === 401) return 'Your session expired. Sign in again to keep saving.'
+  if (statusOf(error) === 403) return `You cannot ${what}.`
+  return `Could not ${what}. The list has been refreshed.`
 }
 
 const identity = (filter: EntriesFilter): string =>
@@ -89,23 +115,58 @@ export const createReader = (filter: () => EntriesFilter) => {
     renameId: null,
     renameKind: null,
     renameTitle: '',
-    windowSize: PAGE_SIZE,
-    keepIds: [],
+    wanted: PAGE_SIZE,
+    dirtyIds: [],
+    listGen: 0,
     pageGen: 0,
   })
 
   const currentFeedId = (): FeedId | null => (filter().feedId as FeedId | undefined) ?? null
 
-  /** The URL's view plus this session's window and retained rows. */
-  const queryFilter = createMemo<EntriesFilter>(() => ({
-    ...filter(),
-    keepIds: session.keepIds.length > 0 ? [...session.keepIds] : undefined,
-  }))
-
   // ---- server data ----
-  const [page, setPage] = createOptimisticStore<EntriesResult & { filter: EntriesFilter }>(
-    () => api.viewEntries(wire(queryFilter()), null, session.windowSize),
-    null,
+  /**
+   * The list, as a projection in its *draft* form: the derive receives what is
+   * already on screen, appends only the page it does not have, and reconciles the
+   * rows this session has written.
+   */
+  const [page, setPage] = createOptimisticStore<ListState>(
+    async (draft) => {
+      // Read tracked state BEFORE the first await: reads after one see the
+      // snapshot taken when the compute started, so a write that landed while a
+      // fetch was in flight would still look like the old value.
+      const key = viewKey()
+      const wanted = session.wanted
+      const dirty = [...session.dirtyIds]
+      const gen = session.listGen
+      // A different view — or a request to re-read from the top — starts over.
+      if (draft.viewKey !== key || draft.gen !== gen) {
+        draft.viewKey = key
+        draft.gen = gen
+        draft.entries = []
+        draft.nextCursor = null
+      }
+      if (draft.entries.length === 0) {
+        const first = await api.viewEntries(wire(filter()), null)
+        draft.entries = snapshot(first.entries)
+        draft.nextCursor = first.nextCursor
+      } else {
+        while (draft.entries.length < wanted && draft.nextCursor) {
+          const next = await api.viewEntries(wire(filter()), wire(draft.nextCursor))
+          draft.entries.push(...snapshot(next.entries))
+          draft.nextCursor = next.nextCursor
+        }
+      }
+      // Rows this session wrote: the server has the last word on their state.
+      if (dirty.length > 0) {
+        const fresh = await api.entriesByIds(wire(dirty))
+        const byId = new Map(fresh.map((row) => [row.id, row]))
+        for (const row of draft.entries) {
+          const server = byId.get(row.id)
+          if (server) Object.assign(row, server)
+        }
+      }
+    },
+    { entries: [], nextCursor: null, viewKey: '', gen: 0 },
   )
   const [panel, setPanel] = createOptimisticStore<FeedPanelResult>(
     () => api.viewPanel(currentFeedId()),
@@ -153,6 +214,45 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   // ---- writes ----
 
+  const [writeError, setWriteError] = createSignal<string | null>(null)
+
+  /**
+   * Run a write and, if it is rejected, say so and put the screen back on truth.
+   *
+   * There is no compensation to write: the framework already discarded the
+   * optimistic layer, so all that is left is telling the reader what happened and
+   * re-reading — which is also what clears a stale row from the list.
+   */
+  const runWrite = async (what: string, work: () => Promise<unknown>): Promise<void> => {
+    try {
+      await work()
+      setWriteError(null)
+    } catch (error) {
+      setWriteError(describeWriteFailure(error, what))
+      refresh(page)
+      refresh(panel)
+      refresh(prefs)
+    }
+  }
+
+  /** Fire-and-forget `runWrite`, for writes whose caller does not wait. */
+  const runWriteNow = (what: string, work: () => Promise<unknown>): void => {
+    void runWrite(what, work)
+  }
+
+  const dismissWriteError = (): void => {
+    setWriteError(null)
+  }
+
+  /** Remember which rows this session wrote, so reads reconcile only those. */
+  const markDirty = (entryIds: EntryId[]): void => {
+    setSession((draft) => {
+      const merged = [...draft.dirtyIds]
+      for (const id of entryIds) if (!merged.includes(id)) merged.push(id)
+      draft.dirtyIds = merged.slice(-DIRTY_LIMIT)
+    })
+  }
+
   /** Sidebar counters follow writes, a beat later rather than per write. */
   let panelTimer: ReturnType<typeof setTimeout> | undefined
   const settlePanel = (): void => {
@@ -163,19 +263,16 @@ export const createReader = (filter: () => EntriesFilter) => {
   /**
    * Mark entries read (or unread): optimistic, then the server's answer.
    *
-   * The ids join `keepIds` first, so the refresh still returns the rows the write
-   * just made non-matching — a row must not disappear from under the reader.
+   * The rows stay on screen because the derive only appends and never replaces;
+   * after the write it re-reads just these ids, so each row settles on whatever
+   * the server says without re-fetching the window.
    */
   const setStatus = (entryIds: EntryId[], status: 'read' | 'unread'): void => {
     if (entryIds.length === 0) return
-    if (status === 'read') {
-      setSession((draft) => {
-        const merged = [...draft.keepIds]
-        for (const id of entryIds) if (!merged.includes(id)) merged.push(id)
-        draft.keepIds = merged.slice(-KEEP_LIMIT)
-      })
-    }
-    action(function* () {
+    // Outside the transition: a plain-store write inside one is reverted with it.
+    markDirty(entryIds)
+    runWriteNow(status === 'read' ? 'mark that read' : 'mark that unread', () =>
+      action(function* () {
       setPage((draft) => {
         for (const entryId of entryIds) {
           const entry = draft.entries.find((candidate) => candidate.id === entryId)
@@ -183,9 +280,10 @@ export const createReader = (filter: () => EntriesFilter) => {
         }
       })
       yield api.setStatus(entryIds, status)
-      refresh(page)
+      yield refresh(page)
       settlePanel()
-    })()
+      })(),
+    )
   }
 
   const toggleRead = (entryId: EntryId): void => {
@@ -264,23 +362,28 @@ export const createReader = (filter: () => EntriesFilter) => {
     const entry = entries().find((candidate) => candidate.id === entryId)
     if (!entry) return
     const next = !entry.starred
-    action(function* () {
+    runWriteNow(next ? 'star that' : 'unstar that', () =>
+      action(function* () {
       setPage((draft) => {
         const target = draft.entries.find((candidate) => candidate.id === entryId)
         if (target) target.starred = next
       })
       yield api.setStarred([entryId], next)
-      refresh(page)
-    })()
+      markDirty([entryId])
+      yield refresh(page)
+      })(),
+    )
   }
 
   // ---- paging: a bigger window ----
 
+  /** Scroll further: the derive appends one more page. */
   const loadMore = (): void => {
     if (!page.nextCursor) return
     setSession((draft) => {
-      draft.windowSize += PAGE_SIZE
+      draft.wanted += PAGE_SIZE
     })
+    refresh(page)
   }
 
   const checkTail = (): void => {
@@ -290,6 +393,8 @@ export const createReader = (filter: () => EntriesFilter) => {
   // A new view means a new list. Keyed on the URL filter (a string), not on the
   // projection's value: that would re-fire on every read and loop, because the
   // reset writes the projection's own inputs.
+  /** The URL's view. */
+  const queryFilter = createMemo<EntriesFilter>(() => filter())
   const viewKey = createMemo(() => identity(filter()))
   createEffect(viewKey, () => {
     setSession((draft) => {
@@ -299,8 +404,9 @@ export const createReader = (filter: () => EntriesFilter) => {
       draft.keepUnreadIds = []
       draft.expandedIds = []
       draft.viewModeOverride = null
-      draft.windowSize = PAGE_SIZE
-      draft.keepIds = []
+      draft.wanted = PAGE_SIZE
+      draft.dirtyIds = []
+      draft.listGen = 0
       draft.pageGen++
     })
   })
@@ -308,7 +414,11 @@ export const createReader = (filter: () => EntriesFilter) => {
   // ---- writes that change the view ----
 
   const refreshFeeds = async (): Promise<void> => {
-    await api.refresh(snapshot(queryFilter()))
+    // New entries arrive at the top; the draft only appends, so ask it to start
+    // over rather than expecting a refresh to reveal them.
+    setSession((draft) => {
+      draft.listGen++
+    })
     refresh(page)
     refresh(panel)
   }
@@ -319,74 +429,86 @@ export const createReader = (filter: () => EntriesFilter) => {
     })
     const feedId = currentFeedId()
     if (!feedId) return
-    action(function* () {
-      setPrefs((draft) => {
-        draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], viewMode }
-      })
-      yield api.setPrefs(feedId, { viewMode })
-      refresh(prefs)
-    })()
+    runWriteNow('save that preference', () =>
+      action(function* () {
+        setPrefs((draft) => {
+          draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], viewMode }
+        })
+        yield api.setPrefs(feedId, { viewMode })
+        refresh(prefs)
+      })(),
+    )
   }
 
   const setSort = (sort: 'oldest' | 'newest'): void => {
     const feedId = currentFeedId()
     if (!feedId) return
-    action(function* () {
-      setPrefs((draft) => {
-        draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], sort }
-      })
-      yield api.setPrefs(feedId, { sort })
-      refresh(prefs)
-      refresh(page)
-    })()
+    runWriteNow('save that sort order', () =>
+      action(function* () {
+        setPrefs((draft) => {
+          draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], sort }
+        })
+        yield api.setPrefs(feedId, { sort })
+        refresh(prefs)
+        refresh(page)
+      })(),
+    )
   }
 
   const setHideReadItems = (hideReadItems: boolean): void => {
     const feedId = currentFeedId()
     if (!feedId) return
-    action(function* () {
-      setPrefs((draft) => {
-        draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], hideReadItems }
-      })
-      yield api.setPrefs(feedId, { hideReadItems })
-      refresh(prefs)
-      refresh(page)
-    })()
+    runWriteNow('save that preference', () =>
+      action(function* () {
+        setPrefs((draft) => {
+          draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], hideReadItems }
+        })
+        yield api.setPrefs(feedId, { hideReadItems })
+        refresh(prefs)
+        refresh(page)
+      })(),
+    )
   }
 
   const toggleHideEmptyFeeds = (): void => {
     const next = !(prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
-    action(function* () {
-      setPrefs((draft) => {
-        draft.userPrefs = { ...draft.userPrefs, hideEmptyFeeds: next }
-      })
-      yield api.setPrefs(null, { hideEmptyFeeds: next })
-      refresh(prefs)
-      refresh(panel)
-    })()
+    runWriteNow('save that preference', () =>
+      action(function* () {
+        setPrefs((draft) => {
+          draft.userPrefs = { ...draft.userPrefs, hideEmptyFeeds: next }
+        })
+        yield api.setPrefs(null, { hideEmptyFeeds: next })
+        refresh(prefs)
+        refresh(panel)
+      })(),
+    )
   }
 
   const toggleAutoRead = (feedId: FeedId): void => {
     const list = prefs.userPrefs.disabledAutoReadFeeds ?? []
     const next = list.includes(feedId) ? list.filter((id) => id !== feedId) : [...list, feedId]
-    action(function* () {
-      setPrefs((draft) => {
-        draft.userPrefs = { ...draft.userPrefs, disabledAutoReadFeeds: next }
-      })
-      yield api.setPrefs(null, { disabledAutoReadFeeds: next })
-      refresh(prefs)
-    })()
+    runWriteNow('save that preference', () =>
+      action(function* () {
+        setPrefs((draft) => {
+          draft.userPrefs = { ...draft.userPrefs, disabledAutoReadFeeds: next }
+        })
+        yield api.setPrefs(null, { disabledAutoReadFeeds: next })
+        refresh(prefs)
+      })(),
+    )
   }
 
   const toggleFavorite = (feedId: FeedId): void => {
     const next = !isFavorite(feedId)
-    action(function* () {
-      setPrefs((draft) => {
-        draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], favorite: next }
-      })
-      yield api.setPrefs(feedId, { favorite: next })
-      refresh(prefs)
-    })()
+    runWriteNow('save that preference', () =>
+      action(function* () {
+        setPrefs((draft) => {
+          draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], favorite: next }
+        })
+        yield api.setPrefs(feedId, { favorite: next })
+        refresh(prefs)
+      })(),
+    )
   }
 
   const startRename = (id: string, kind: 'feed' | 'category', title: string): void => {
@@ -405,21 +527,51 @@ export const createReader = (filter: () => EntriesFilter) => {
     })
   }
 
+  /** Edit the rename field; the draft lives in the session so both editors share it. */
+  const setRenameTitle = (value: string): void => {
+    setSession((draft) => {
+      draft.renameTitle = value
+    })
+  }
+
+  /**
+   * Rename a feed or category: optimistic in the sidebar, then the server's copy.
+   *
+   * The sidebar and the feed popover both drive this — one title, one write, one
+   * reconciliation — rather than each keeping its own editor state.
+   */
   const saveRename = async (): Promise<void> => {
     const id = session.renameId
     const kind = session.renameKind
     const title = session.renameTitle.trim()
     if (id == null || kind == null || !title) return
-    if (kind === 'feed') await api.renameFeed(id as FeedId, title)
-    else await api.renameCategory(id as CategoryId, title)
-    cancelRename()
-    refresh(panel)
+    const rename = (draft: FeedPanelResult) => {
+      if (kind === 'feed') {
+        for (const feed of draft.allFeeds) if (feed.id === id) feed.title = title
+        for (const feed of draft.feeds) if (feed.id === id) feed.title = title
+      } else {
+        for (const category of draft.categories) if (category.id === id) category.title = title
+      }
+    }
+    // Out of the transition, so the draft stays put if the write is rejected.
+    rename(panel)
+    await runWrite('rename that', () =>
+      action(function* () {
+      yield kind === 'feed'
+        ? api.renameFeed(id as FeedId, title)
+        : api.renameCategory(id as CategoryId, title)
+      cancelRename()
+      refresh(panel)
+      })(),
+    )
   }
 
   const unsubscribe = async (feedId: FeedId): Promise<void> => {
-    await api.unsubscribe(feedId)
-    refresh(panel)
-    refresh(page)
+    await runWrite('unsubscribe from that feed', async () => {
+      await api.unsubscribe(feedId)
+      refresh(panel)
+      refresh(page)
+    })
   }
 
   const markIconFailed = (feedId: FeedId): void => {
@@ -445,7 +597,13 @@ export const createReader = (filter: () => EntriesFilter) => {
     if (pollTimer) return stopIdleRefresh
     pollTimer = setInterval(() => {
       refresh(panel)
-      if (session.atListEnd) refresh(page)
+      // Only when the reader has reached the end: mid-scroll, the list is theirs.
+      if (session.atListEnd) {
+        setSession((draft) => {
+          draft.listGen++
+        })
+        refresh(page)
+      }
     }, POLL_MS)
     return stopIdleRefresh
   }
@@ -487,7 +645,10 @@ export const createReader = (filter: () => EntriesFilter) => {
     toggleAutoRead,
     startRename,
     cancelRename,
+    setRenameTitle,
     saveRename,
+    writeError,
+    dismissWriteError,
     unsubscribe,
     markIconFailed,
     startIdleRefresh,

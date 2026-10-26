@@ -208,11 +208,33 @@ export const ReaderPage = () => {
         {/* The components below read the three projections; their first read is
             what the boundary awaits (and what 'async' makes the server wait for).
             No wrapper `Show`: re-reading a projection must not re-suspend. */}
-          <div class="grid grid-rows-[auto_1fr] app-container flex-1 min-h-0">
+          <div class="grid grid-rows-[auto_auto_1fr] app-container flex-1 min-h-0">
             <TopToolbar
               onToggleSidebar={() => setSidebarOpen(!sidebarOpen())}
               reading={hasView()}
             />
+
+            {/* A rejected write is already rolled back by the framework; this says
+                so instead of letting a row quietly flip back. */}
+            <Show when={r.writeError()}>
+              {(message) => (
+                <div
+                  role="alert"
+                  data-testid="write-error"
+                  class="mx-3 mb-2 flex items-center gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+                >
+                  <span class="flex-1">{message()}</span>
+                  <button
+                    type="button"
+                    class="px-2 cursor-pointer"
+                    aria-label="Dismiss"
+                    onClick={() => r.dismissWriteError()}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </Show>
 
             <div class="relative grid grid-cols-1 md:grid-cols-[var(--sidebar-w)_1fr] gap-x-3 min-h-0 overflow-hidden">
               {/* Sidebar: static column on md+, off-canvas drawer on mobile toggled by
