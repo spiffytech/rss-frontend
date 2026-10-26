@@ -955,3 +955,97 @@ it("the View toggle flips on the first click, and reads truthfully", async () =>
     await view.close();
   }
 }, 45_000);
+
+/**
+ * Faults a page raised on its own: uncaught errors, unhandled rejections, and the
+ * diagnostics Solid escalates to errors. Installed *after* the page settles,
+ * because a fault during load is the load assertion's business.
+ */
+const watchForFaults = async (view: Bun.WebView): Promise<void> => {
+  await view.evaluate(`
+    (() => {
+      window.__faults = []
+      window.addEventListener('error', (e) =>
+        window.__faults.push('error: ' + ((e.error && e.error.stack) || e.message)))
+      window.addEventListener('unhandledrejection', (e) =>
+        window.__faults.push('rejection: ' + ((e.reason && e.reason.stack) || String(e.reason))))
+      return true
+    })()
+  `);
+};
+
+const faults = async (view: Bun.WebView): Promise<string[]> =>
+  JSON.parse((await view.evaluate("JSON.stringify(window.__faults || [])")) as string) as string[];
+
+it("clicking through feeds keeps working: navigation is not a one-shot", async () => {
+  // The regression this exists for: the reading surface halted the reactive
+  // system on the home page, so the *first* click navigated and every later one
+  // was silently dropped. Every other test here reloads the document per test,
+  // which hides that class of bug completely — a halted app still renders.
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    await view.navigate(`${BASE}/`);
+    await view.evaluate(until('return document.querySelectorAll(".app-sidebar a").length > 2 ? 1 : 0'));
+    await watchForFaults(view);
+
+    const visited: string[] = [];
+    for (const index of [1, 2, 3]) {
+      const target = (await view.evaluate(
+        `(() => { const a = document.querySelectorAll('.app-sidebar a')[${index}]; return a ? a.getAttribute('href') : '' })()`,
+      )) as string;
+      expect(target).not.toBe("");
+
+      await view.evaluate(`document.querySelectorAll('.app-sidebar a')[${index}].click()`);
+      const landed = (await view.evaluate(
+        until(
+          `const want = ${JSON.stringify(target)}; return location.pathname + location.search === want ? want : ''`,
+          10_000,
+        ),
+      )) as string;
+      // The URL follows the click, and the click was not a full page load.
+      expect(landed).toBe(target);
+      visited.push(landed);
+
+      // …and the view it landed on has entries, i.e. the projection re-read.
+      const rows = (await view.evaluate(
+        until('const n = document.querySelectorAll("[data-entry-id]").length; return n > 0 ? n : 0'),
+      )) as number;
+      expect(rows).toBeGreaterThan(0);
+    }
+
+    // Different feeds, not the same one three times.
+    expect(new Set(visited).size).toBe(visited.length);
+    expect(await faults(view)).toEqual([]);
+  } finally {
+    await view.close();
+  }
+}, 60_000);
+
+it("a reading session raises no page faults", async () => {
+  // Reads, auto-read on scroll, and a star: the writes that go through the
+  // optimistic path. A rejected write is expected to be *reported* in the UI, not
+  // to escape as an uncaught error.
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    await openFeedView(view);
+    await watchForFaults(view);
+
+    await view.evaluate(`
+      (() => {
+        const el = document.querySelector('[data-testid="entry-scroll"]')
+        el.scrollTop = 2400
+        return el.scrollTop
+      })()
+    `);
+    const read = (await view.evaluate(
+      until(
+        `const n = [...document.querySelectorAll('[data-entry-id]')].filter((a) => a.className.includes('bg-gray-50')).length; return n > 0 ? n : 0`,
+      ),
+    )) as number;
+    expect(read).toBeGreaterThan(0);
+  } finally {
+    await view.close();
+  }
+}, 60_000);

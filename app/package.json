@@ -14,6 +14,7 @@
     "preview": "bun run build && bun server.ts",
     "test": "bun test",
     "test:webview": "bun run build && WEBVIEW=1 bun test test/webview.test.ts",
+    "test:dev": "WEBVIEW=1 bun test test/dev-smoke.test.ts",
     "typecheck": "bunx --bun tsc --noEmit",
     "db:generate": "drizzle-kit generate"
   },
