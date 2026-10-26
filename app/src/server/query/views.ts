@@ -4,7 +4,7 @@
  * filter predicate and the counters share one definition of "visible", and
  * soft-deleted rows never appear anywhere.
  */
-import { and, asc, desc, eq, inArray, or, sql, type SQL } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, sql, type SQL } from 'drizzle-orm'
 
 import type { EntriesFilter } from '../../shared/filter'
 import type { CategoryCount, EntryContent, EntrySummary, FeedInfo, FeedPanelResult } from '../../shared/types'
@@ -35,16 +35,7 @@ function visibilityConditions(userId: UserId, filter: EntriesFilter): { where: S
   // Search spans both buckets by default (the old app's search did); plain
   // views follow hideReadItems (default: unread only).
   const hideRead = isSearch ? filter.searchStatus === 'unread' : filter.hideReadItems ?? DEFAULT_HIDE_READ_ITEMS
-  if (hideRead) {
-    const keep = filter.keepIds ?? []
-    // "Unread, or one of the rows this session has read" — so marking read does
-    // not make a row vanish from the list you are scrolling.
-    where.push(
-      keep.length > 0
-        ? or(eq(entries.status, 'unread'), inArray(entries.id, keep as EntryId[]))!
-        : eq(entries.status, 'unread'),
-    )
-  }
+  if (hideRead) where.push(eq(entries.status, 'unread'))
   if (filter.starred === true) where.push(eq(entries.starred, true))
   if (filter.feedId) where.push(eq(entries.feedId, filter.feedId as FeedId))
   if (filter.categoryId) {
@@ -133,9 +124,8 @@ export function queryView(
 /**
  * Re-read specific rows by id.
  *
- * The reader uses this to reconcile after a write: it costs one `id IN (…)`
- * lookup for the rows that changed, instead of re-reading the whole window it is
- * already showing.
+ * `setStatus` uses this to answer with the rows it just wrote: the client applies
+ * the server's copy of those rows and never re-reads the window it is showing.
  */
 export function entriesByIds(
   db: Db,

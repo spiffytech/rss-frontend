@@ -56,11 +56,3 @@ export function timeAgo(ms: number): string {
   if (months < 12) return `${months}mo`
   return `${Math.floor(months / 12)}y`
 }
-
-export function domainOf(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, '')
-  } catch {
-    return url
-  }
-}

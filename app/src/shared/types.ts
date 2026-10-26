@@ -71,21 +71,3 @@ export type EntriesResult = {
  *  search views, whose ordering is unread-first (0 = unread, 1 = read). */
 export type ViewCursor = { publishedAt: EpochMs; id: EntryId; bucket?: 0 | 1 }
 
-export type EntryResult = {
-  entry: EntrySummary
-}
-
-/** Everything the SPA needs once at page load. */
-export interface BootstrapResult extends EntriesResult, FeedPanelResult {
-  userPrefs: UserPrefs
-  /** All per-feed view prefs (feedId -> prefs), hydrated once. */
-  feedPrefs: Record<FeedId, FeedPrefs>
-  /** The submitted identity filter with this feed's view prefs folded in —
-   *  exactly the filter the returned entries were queried with. */
-  filter: EntriesFilter
-}
-
-export type SessionInfo = {
-  authenticated: boolean
-  username?: string
-}

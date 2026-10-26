@@ -11,22 +11,11 @@ export interface TrackedRect {
 }
 
 /**
- * Pick the single deterministic winner among tracked entries: the topmost
- * entry still visible (bottom > 0) in the scroll container. Mirrors the old
- * datastar track-top plugin (one shared observer + registry per scroll root).
+ * Height of the reading band at the top of the scroll container, as a fraction of
+ * its height. One constant for both users of the band: the scroll sweep (what
+ * did I scroll past?) and the keyboard anchor (what am I looking at?).
  */
-export function pickTopmostVisible<K>(registry: ReadonlyMap<K, TrackedRect>): K | null {
-  let best: K | null = null
-  let bestTop = Infinity
-  for (const [entryId, r] of registry) {
-    if (r.bottom <= 0) continue
-    if (r.top < bestTop) {
-      bestTop = r.top
-      best = entryId
-    }
-  }
-  return best
-}
+export const BAND_FRACTION = 0.15
 
 /**
  * Auto-read guard: should the scroll-driven auto-read fire for this entry?

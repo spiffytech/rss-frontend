@@ -1,38 +1,10 @@
 import { describe, expect, test } from 'bun:test'
 
-import { clampNavIndex, isScrolledPast, pickTopmostVisible, shouldAutoRead } from '../src/shared/reading'
+import { clampNavIndex, isScrolledPast, shouldAutoRead } from '../src/shared/reading'
 import type { EntryId, FeedId } from '../src/shared/ids'
 
 const entry = (s: string) => s as EntryId
 const feed = (s: string) => s as FeedId
-
-describe('pickTopmostVisible', () => {
-  test('picks the topmost visible entry', () => {
-    const registry = new Map<EntryId, { top: number; bottom: number }>([
-      [entry('1'), { top: 100, bottom: 400 }],
-      [entry('2'), { top: 500, bottom: 900 }],
-      [entry('3'), { top: -50, bottom: 80 }], // partially scrolled out, still visible
-    ])
-    expect(pickTopmostVisible(registry)).toBe(entry('3'))
-  })
-
-  test('skips entries fully scrolled above', () => {
-    const registry = new Map<EntryId, { top: number; bottom: number }>([
-      [entry('1'), { top: -100, bottom: -20 }],
-      [entry('2'), { top: 200, bottom: 300 }],
-    ])
-    expect(pickTopmostVisible(registry)).toBe(entry('2'))
-  })
-
-  test('returns null when nothing is visible', () => {
-    const registry = new Map<EntryId, { top: number; bottom: number }>([[entry('1'), { top: -100, bottom: -50 }]])
-    expect(pickTopmostVisible(registry)).toBeNull()
-  })
-
-  test('returns null for an empty registry', () => {
-    expect(pickTopmostVisible(new Map())).toBeNull()
-  })
-})
 
 describe('shouldAutoRead', () => {
   const base = {

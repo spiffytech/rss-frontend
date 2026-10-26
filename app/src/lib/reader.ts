@@ -1,19 +1,16 @@
 /**
  * Reader state, per page render.
  *
- * Server data lives in optimistic projections; mutation goes through `action`
- * (write optimistically, `yield` the call, `refresh` the projection); what no
- * server has an opinion about lives in a plain session store.
+ * Three mechanisms, and nothing else:
  *
- * Two shapes are driven by the projection's semantics:
- *
- *  - **Paging grows the window** (`windowSize`). `refresh` replaces a
- *    projection's value, so a cursor-append would be thrown away; asking again
- *    with a bigger `LIMIT` returns the same rows plus more.
- *  - **Rows you read stay put**, via `keepIds` in the filter: the query keeps the
- *    rows this session marked read (`status = 'unread' OR id IN (…)`), so the
- *    refresh after a write does not make them vanish mid-scroll. They leave when
- *    you navigate, because the session ends.
+ *  - **The list is a projection**, so the first document arrives with rows (the
+ *    server awaits the read) and a write can be applied optimistically.
+ *  - **Paging only appends.** The derive receives the rows already on screen and
+ *    asks for the missing page; `refresh` therefore never disturbs what you are
+ *    reading, and a row you have read cannot vanish from under you.
+ *  - **A write applies the server's copy of the rows it touched.** `setStatus`
+ *    answers with them, so a mark-read costs no re-read of the window — no
+ *    dirty-id bookkeeping, no reconciliation pass.
  */
 import {
   action,
@@ -27,28 +24,21 @@ import {
 } from 'solid-js'
 
 import * as api from '../server/actions'
-import { hasView, type EntriesFilter } from '../shared/filter'
+import { BAND_FRACTION, clampNavIndex, shouldAutoRead } from '../shared/reading'
+import { filterIdentity, hasView, type EntriesFilter } from '../shared/filter'
 import type { CategoryId, EntryId, FeedId } from '../shared/ids'
 import {
   DEFAULT_HIDE_EMPTY_FEEDS,
-  DEFAULT_HIDE_READ_ITEMS,
-  DEFAULT_SORT,
   DEFAULT_VIEW_MODE,
   type FeedPrefs,
   type UserPrefs,
 } from '../shared/prefs'
-import { shouldAutoRead } from '../shared/reading'
-import { scrollToEntry } from './nav'
-
-/** The RPC boundary takes JSON: hand it plain data, never a store proxy. */
-const wire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
-import type { EntriesResult, EntrySummary, FeedPanelResult, ViewCursor } from '../shared/types'
+import type { EntrySummary, FeedPanelResult, ViewCursor } from '../shared/types'
 import { compareTitlesCI, computeUnreadCount } from '../shared/util'
+import { scrollToEntry } from './nav'
 
 /** One screenful; scrolling asks for another. */
 const PAGE_SIZE = 100
-/** How many written ids are kept for reconciliation. */
-const DIRTY_LIMIT = 500
 /** How long after a write burst the sidebar's counters are re-read. */
 const PANEL_SETTLE_MS = 300
 const POLL_MS = 60_000
@@ -63,10 +53,9 @@ type ListState = {
 }
 
 export type ReaderSession = {
-  currentId: EntryId | null
-  navRequest: EntryId | null
   userHasScrolled: boolean
   atListEnd: boolean
+  /** Rows you explicitly un-read this session: the scroll sweep must not re-read them. */
   keepUnreadIds: EntryId[]
   expandedIds: EntryId[]
   viewModeOverride: 'expanded' | 'list' | null
@@ -74,13 +63,17 @@ export type ReaderSession = {
   renameId: string | null
   renameKind: 'feed' | 'category' | null
   renameTitle: string
+  /**
+   * Rows the server confirmed after a write this session, keyed by id. The list's
+   * derive applies these on top of what it read, so a mark-read survives the
+   * commit without re-reading the window.
+   */
+  confirmed: Record<EntryId, EntrySummary>
   /** Rows to hold; grows as you scroll. */
   wanted: number
-  /** Rows this session wrote, reconciled on every read. */
-  dirtyIds: EntryId[]
   /** Bumped to ask the list to start over from the newest row. */
   listGen: number
-  /** Bumped when the list is replaced, so observers can re-arm. */
+  /** Bumped when the list is replaced, so the page can scroll to the top. */
   pageGen: number
 }
 
@@ -98,26 +91,22 @@ export const describeWriteFailure = (error: unknown, what: string): string => {
   return `Could not ${what}. The list has been refreshed.`
 }
 
-const identity = (filter: EntriesFilter): string =>
-  [filter.feedId ?? '', filter.categoryId ?? '', filter.starred ? '1' : '', filter.search ?? ''].join(
-    '|',
-  )
+/** The RPC boundary takes JSON: hand it plain data, never a store proxy. */
+const wire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
 
 export const createReader = (filter: () => EntriesFilter) => {
   const [session, setSession] = createStore<ReaderSession>({
-    currentId: null,
-    navRequest: null,
     userHasScrolled: false,
     atListEnd: false,
     keepUnreadIds: [],
     expandedIds: [],
     viewModeOverride: null,
     iconFailed: {},
+    confirmed: {},
     renameId: null,
     renameKind: null,
     renameTitle: '',
     wanted: PAGE_SIZE,
-    dirtyIds: [],
     listGen: 0,
     pageGen: 0,
   })
@@ -127,24 +116,23 @@ export const createReader = (filter: () => EntriesFilter) => {
   /** The URL's view: the key the list's derive resets on. Declared before the
    *  projections, because hydration can run a derive while this body is still
    *  executing (a `const` below would be in its temporal dead zone). */
-  const queryFilter = createMemo<EntriesFilter>(() => filter())
-  const viewKey = createMemo(() => identity(filter()))
+  const viewKey = createMemo(() => filterIdentity(filter()))
 
   // ---- server data ----
   /**
    * The list, as a projection in its *draft* form: the derive receives what is
-   * already on screen, appends only the page it does not have, and reconciles the
-   * rows this session has written.
+   * already on screen and appends only the page it does not have.
    */
   const [page, setPage] = createOptimisticStore<ListState>(
     async (draft) => {
       // Read tracked state BEFORE the first await: reads after one see the
-      // snapshot taken when the compute started, so a write that landed while a
-      // fetch was in flight would still look like the old value.
+      // snapshot taken when the compute started.
       const key = viewKey()
       const wanted = session.wanted
-      const dirty = [...session.dirtyIds]
       const gen = session.listGen
+      // A plain copy, taken before the first await: a store read after one sees
+      // the snapshot from when the compute started.
+      const confirmed = { ...session.confirmed }
       // No view (the home page) means no window to read: asking would be a
       // request for entries with no filter, which the server refuses.
       if (!hasView(filter())) {
@@ -172,10 +160,10 @@ export const createReader = (filter: () => EntriesFilter) => {
           draft.nextCursor = next.nextCursor
         }
       }
-      // Rows this session wrote: the server has the last word on their state.
-      if (dirty.length > 0) {
-        const fresh = await api.entriesByIds(wire(dirty))
-        const byId = new Map(fresh.map((row) => [row.id, row]))
+      // The server's copy of the rows this session wrote wins over the read.
+      const applied = Object.values(confirmed)
+      if (applied.length > 0) {
+        const byId = new Map(applied.map((row) => [row.id, row]))
         for (const row of draft.entries) {
           const server = byId.get(row.id)
           if (server) Object.assign(row, server)
@@ -228,9 +216,12 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   const isFavorite = (feedId: FeedId): boolean => prefs.feedPrefs[feedId]?.favorite === true
 
-  /** Does this feed have a stored icon? Without one the browser must not ask. */
-  const hasIcon = (feedId: FeedId): boolean =>
-    panel.allFeeds.find((feed) => feed.id === feedId)?.iconUrl != null
+  /** Where this feed's icon can be fetched, or `null` for "show the letter". */
+  const iconUrl = (feedId: FeedId): string | null => {
+    if (session.iconFailed[feedId] === true) return null
+    const feed = panel.allFeeds.find((candidate) => candidate.id === feedId)
+    return feed?.iconUrl != null ? `/api/icons/${feedId}` : null
+  }
 
   // ---- writes ----
 
@@ -255,22 +246,23 @@ export const createReader = (filter: () => EntriesFilter) => {
     }
   }
 
-  /** Fire-and-forget `runWrite`, for writes whose caller does not wait. */
-  const runWriteNow = (what: string, work: () => Promise<unknown>): void => {
-    void runWrite(what, work)
-  }
-
   const dismissWriteError = (): void => {
     setWriteError(null)
   }
 
-  /** Remember which rows this session wrote, so reads reconcile only those. */
-  const markDirty = (entryIds: EntryId[]): void => {
+  /**
+   * Record the rows the server answered with, then let the list re-produce itself.
+   *
+   * A projection's value at commit comes from its derive, not from the write — so
+   * the write is only the guess, and the derive has to be able to produce the
+   * truth. It can: with the rows already on screen the derive fetches nothing, so
+   * this reconciles without a read.
+   */
+  const confirm = (rows: EntrySummary[]): void => {
     setSession((draft) => {
-      const merged = [...draft.dirtyIds]
-      for (const id of entryIds) if (!merged.includes(id)) merged.push(id)
-      draft.dirtyIds = merged.slice(-DIRTY_LIMIT)
+      for (const row of rows) draft.confirmed[row.id] = row
     })
+    refresh(page)
   }
 
   /** Sidebar counters follow writes, a beat later rather than per write. */
@@ -283,27 +275,25 @@ export const createReader = (filter: () => EntriesFilter) => {
   /**
    * Mark entries read (or unread): optimistic, then the server's answer.
    *
-   * The rows stay on screen because the derive only appends and never replaces;
-   * after the write it re-reads just these ids, so each row settles on whatever
-   * the server says without re-fetching the window.
+   * The response carries the rows it wrote, so the list settles on the server's
+   * copy without re-reading the window — which is what keeps the scroll position
+   * and the appended pages intact.
    */
   const setStatus = (entryIds: EntryId[], status: 'read' | 'unread'): void => {
     if (entryIds.length === 0) return
-    // Outside the transition: a plain-store write inside one is reverted with it.
-    markDirty(entryIds)
-    runWriteNow(status === 'read' ? 'mark that read' : 'mark that unread', () =>
-      action(function* () {
-      setPage((draft) => {
-        for (const entryId of entryIds) {
-          const entry = draft.entries.find((candidate) => candidate.id === entryId)
-          if (entry) entry.status = status
-        }
-      })
-      yield api.setStatus(entryIds, status)
-      yield refresh(page)
+    void runWrite(status === 'read' ? 'mark that read' : 'mark that unread', async () => {
+      const rows = await action(function* () {
+        setPage((draft) => {
+          for (const entryId of entryIds) {
+            const entry = draft.entries.find((candidate) => candidate.id === entryId)
+            if (entry) entry.status = status
+          }
+        })
+        return snapshot(yield api.setStatus(entryIds, status))
+      })()
+      confirm(rows)
       settlePanel()
-      })(),
-    )
+    })
   }
 
   const toggleRead = (entryId: EntryId): void => {
@@ -311,7 +301,8 @@ export const createReader = (filter: () => EntriesFilter) => {
     if (!entry) return
     const next = entry.status === 'read' ? 'unread' : 'read'
     setSession((draft) => {
-      if (next === 'unread' && !draft.keepUnreadIds.includes(entryId)) draft.keepUnreadIds.push(entryId)
+      if (next === 'unread' && !draft.keepUnreadIds.includes(entryId))
+        draft.keepUnreadIds.push(entryId)
       if (next === 'read') draft.keepUnreadIds = draft.keepUnreadIds.filter((id) => id !== entryId)
     })
     setStatus([entryId], next)
@@ -361,39 +352,32 @@ export const createReader = (filter: () => EntriesFilter) => {
   /**
    * Index of the card at the top of the reading band, read from the DOM.
    *
-   * Geometry rather than `session.currentId`: that one is fed by an
-   * IntersectionObserver, which lags a fast or programmatic scroll, and a stale
-   * anchor made Prev/Next move relative to an entry that had already left the
-   * screen. The band matches the sweep's (top {@link BAND_FRACTION} of the list).
+   * Geometry, not an observer: the same question j/k answers ("what am I looking
+   * at?") and the same line the scroll sweep uses, so the keys and the sweep can
+   * never disagree about which card is current.
    */
   const anchorIndex = (): number => {
     const container = document.querySelector('[data-testid="entry-scroll"]')
     const list = entries()
-    if (!(container instanceof HTMLElement)) {
-      const known = session.currentId ? list.findIndex((entry) => entry.id === session.currentId) : 0
-      return known < 0 ? 0 : known
-    }
-    const bandTop = container.getBoundingClientRect().top + container.clientHeight * 0.15
+    if (!(container instanceof HTMLElement)) return 0
+    const bandTop = container.getBoundingClientRect().top + container.clientHeight * BAND_FRACTION
     for (let index = 0; index < list.length; index++) {
-      const el = document.getElementById(`entry-${list[index]!.id}`)
-      if (!el) continue
-      if (el.getBoundingClientRect().bottom > bandTop) return index
+      const element = document.getElementById(`entry-${list[index]!.id}`)
+      if (!element) continue
+      if (element.getBoundingClientRect().bottom > bandTop) return index
     }
     return list.length - 1
   }
 
+  /** The entry the keyboard acts on: whatever is at the band. */
+  const currentEntryId = (): EntryId | null => entries()[anchorIndex()]?.id ?? null
+
   const moveAndRead = (delta: 1 | -1): void => {
     const ids = entries().map((entry) => entry.id)
     if (ids.length === 0) return
-    const currentIndex = anchorIndex()
-    const nextIndex = Math.max(0, Math.min(ids.length - 1, currentIndex + delta))
-    const nextId = ids[nextIndex]!
-    setSession((draft) => {
-      draft.currentId = nextId
-      draft.navRequest = nextId
-    })
-    // Instant, and before the write: an effect would scroll on its own schedule,
-    // which puts the server round trip in front of the view moving.
+    const nextId = ids[clampNavIndex(anchorIndex() + delta, ids.length)]!
+    // Instant: this is a keyboard gesture, and the scroll must not queue behind
+    // the write that follows it.
     scrollToEntry(nextId)
     autoRead(nextId)
   }
@@ -409,20 +393,20 @@ export const createReader = (filter: () => EntriesFilter) => {
     const entry = entries().find((candidate) => candidate.id === entryId)
     if (!entry) return
     const next = !entry.starred
-    runWriteNow(next ? 'star that' : 'unstar that', () =>
-      action(function* () {
-      setPage((draft) => {
-        const target = draft.entries.find((candidate) => candidate.id === entryId)
-        if (target) target.starred = next
-      })
-      yield api.setStarred([entryId], next)
-      markDirty([entryId])
-      yield refresh(page)
-      })(),
-    )
+    const what = next ? 'star that' : 'unstar that'
+    void runWrite(what, async () => {
+      const rows = await action(function* () {
+        setPage((draft) => {
+          const target = draft.entries.find((candidate) => candidate.id === entryId)
+          if (target) target.starred = next
+        })
+        return snapshot(yield api.setStarred([entryId], next))
+      })()
+      confirm(rows)
+    })
   }
 
-  // ---- paging: a bigger window ----
+  // ---- paging ----
 
   /** Scroll further: the derive appends one more page. */
   const loadMore = (): void => {
@@ -442,8 +426,6 @@ export const createReader = (filter: () => EntriesFilter) => {
   // reset writes the projection's own inputs.
   createEffect(viewKey, () => {
     setSession((draft) => {
-      draft.currentId = null
-      draft.navRequest = null
       draft.userHasScrolled = false
       // Write only what changes: a fresh `[]` invalidates the list's derive,
       // which then reads a window for a view the reader has not opened.
@@ -451,7 +433,8 @@ export const createReader = (filter: () => EntriesFilter) => {
       if (draft.expandedIds.length > 0) draft.expandedIds = []
       draft.viewModeOverride = null
       draft.wanted = PAGE_SIZE
-      if (draft.dirtyIds.length > 0) draft.dirtyIds = []
+      draft.atListEnd = false
+      draft.confirmed = {}
       draft.listGen = 0
       draft.pageGen++
     })
@@ -464,6 +447,7 @@ export const createReader = (filter: () => EntriesFilter) => {
     // over rather than expecting a refresh to reveal them.
     setSession((draft) => {
       draft.listGen++
+      draft.confirmed = {}
     })
     refresh(page)
     refresh(panel)
@@ -475,7 +459,7 @@ export const createReader = (filter: () => EntriesFilter) => {
     })
     const feedId = currentFeedId()
     if (!feedId) return
-    runWriteNow('save that preference', () =>
+    void runWrite('save that preference', () =>
       action(function* () {
         setPrefs((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], viewMode }
@@ -489,7 +473,7 @@ export const createReader = (filter: () => EntriesFilter) => {
   const setSort = (sort: 'oldest' | 'newest'): void => {
     const feedId = currentFeedId()
     if (!feedId) return
-    runWriteNow('save that sort order', () =>
+    void runWrite('save that sort order', () =>
       action(function* () {
         setPrefs((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], sort }
@@ -504,7 +488,7 @@ export const createReader = (filter: () => EntriesFilter) => {
   const setHideReadItems = (hideReadItems: boolean): void => {
     const feedId = currentFeedId()
     if (!feedId) return
-    runWriteNow('save that preference', () =>
+    void runWrite('save that preference', () =>
       action(function* () {
         setPrefs((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], hideReadItems }
@@ -518,7 +502,7 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   const toggleHideEmptyFeeds = (): void => {
     const next = !(prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
-    runWriteNow('save that preference', () =>
+    void runWrite('save that preference', () =>
       action(function* () {
         setPrefs((draft) => {
           draft.userPrefs = { ...draft.userPrefs, hideEmptyFeeds: next }
@@ -533,7 +517,7 @@ export const createReader = (filter: () => EntriesFilter) => {
   const toggleAutoRead = (feedId: FeedId): void => {
     const list = prefs.userPrefs.disabledAutoReadFeeds ?? []
     const next = list.includes(feedId) ? list.filter((id) => id !== feedId) : [...list, feedId]
-    runWriteNow('save that preference', () =>
+    void runWrite('save that preference', () =>
       action(function* () {
         setPrefs((draft) => {
           draft.userPrefs = { ...draft.userPrefs, disabledAutoReadFeeds: next }
@@ -546,7 +530,7 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   const toggleFavorite = (feedId: FeedId): void => {
     const next = !isFavorite(feedId)
-    runWriteNow('save that preference', () =>
+    void runWrite('save that preference', () =>
       action(function* () {
         setPrefs((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], favorite: next }
@@ -603,11 +587,11 @@ export const createReader = (filter: () => EntriesFilter) => {
     rename(panel)
     await runWrite('rename that', () =>
       action(function* () {
-      yield kind === 'feed'
-        ? api.renameFeed(id as FeedId, title)
-        : api.renameCategory(id as CategoryId, title)
-      cancelRename()
-      refresh(panel)
+        yield kind === 'feed'
+          ? api.renameFeed(id as FeedId, title)
+          : api.renameCategory(id as CategoryId, title)
+        cancelRename()
+        refresh(panel)
       })(),
     )
   }
@@ -657,7 +641,6 @@ export const createReader = (filter: () => EntriesFilter) => {
   return {
     entries,
     filter,
-    queryFilter,
     page,
     setPage,
     panel,
@@ -672,12 +655,13 @@ export const createReader = (filter: () => EntriesFilter) => {
     favoriteFeeds,
     favoriteFeedsWithUnread,
     isFavorite,
-    hasIcon,
+    iconUrl,
     toggleFavorite,
     toggleRead,
     toggleExpanded,
     autoRead,
     moveAndRead,
+    currentEntryId,
     markDisplayed,
     setStatus,
     toggleStar,

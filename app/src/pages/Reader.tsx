@@ -1,25 +1,17 @@
 import { Loading, Show, createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { useLocation } from "@solidjs/router";
 
-import { hasView as sharedHasView, parseFilterFromUrl } from "../shared/filter";
+import { filterIdentity, hasView as sharedHasView, parseFilterFromUrl } from "../shared/filter";
 import type { EntriesFilter } from "../shared/filter";
 import { attachKeyboard } from "../lib/keyboard";
-import { scrollToEntry } from "../lib/nav";
 import { createReader } from "../lib/reader";
 import { ReaderContext } from "../lib/reader-context";
 import { Delayed } from "../components/Delayed";
 import { FeedPanel } from "../components/FeedPanel";
 import { Home } from "../components/Home";
 import { EntryList } from "../components/EntryList";
+import { watchScroll } from "../lib/observers";
 import { TopToolbar } from "../components/TopToolbar";
-
-const identityKey = (filter: EntriesFilter): string =>
-  [
-    filter.feedId ?? "",
-    filter.categoryId ?? "",
-    filter.starred ? "1" : "",
-    filter.search ?? "",
-  ].join("|");
 
 /**
  * The reading surface: toolbar, sidebar (a static column on md+, an off-canvas
@@ -70,10 +62,12 @@ export const ReaderPage = () => {
       setViewMode(r.effectiveViewMode() === "expanded" ? "list" : "expanded");
     });
     const stopIdle = r.startIdleRefresh();
+    const stopScroll = watchScroll(r);
 
     return () => {
       stopKeys();
       stopIdle();
+      stopScroll();
       mql.removeEventListener("change", onChange);
     };
   });
@@ -82,7 +76,7 @@ export const ReaderPage = () => {
   // own — the projection is keyed on the filter — so this listener only closes
   // the drawer and needs no refetch of its own.
   createEffect(
-    () => identityKey(filter()),
+    () => filterIdentity(filter()),
     () => {
       setSidebarOpen(false);
     },
@@ -100,37 +94,6 @@ export const ReaderPage = () => {
       }
     },
   );
-
-  // Scroll-into-view for keyboard nav; one effect for the whole app.
-  createEffect(
-    () => r.session.navRequest,
-    (id) => {
-      if (id == null) return;
-      scrollToEntry(id);
-      r.setSession((state) => {
-        state.navRequest = null;
-      });
-    },
-  );
-
-  // Mark userHasScrolled + end-of-list state on the entry-list scroll container.
-  // atListEnd gates the idle-time tail recheck (checkTail).
-  const onListScroll = (): void => {
-    const element = scrollEl;
-    // A scroll landing at scrollTop 0 is our own programmatic reset when a fresh
-    // list replaces the old one — not user intent. Without this, opening a feed
-    // arms the auto-read sweep and marks its first entry read.
-    if (element && element.scrollTop !== 0)
-      r.setSession((state) => {
-        state.userHasScrolled = true;
-      });
-    if (element) {
-      const atEnd = element.scrollTop + element.clientHeight >= element.scrollHeight - 200;
-      r.setSession((state) => {
-        state.atListEnd = atEnd;
-      });
-    }
-  };
 
   // Desktop drag-to-resize of the sidebar: pure pointer events + a CSS var the
   // grid column reads.
@@ -277,7 +240,6 @@ export const ReaderPage = () => {
                 }}
                 class="overflow-y-auto min-h-0"
                 data-testid="entry-scroll"
-                onScroll={onListScroll}
               >
                 {/* No identity filter means no view: the home page is a set of links,
               not a list of entries. Everything below it in this component only

@@ -58,8 +58,3 @@ export function userScope(): string {
 export function feedScope(feedId: FeedId): string {
   return `feed:${feedId}`
 }
-
-/** `feed:<uuid>` → FeedId, or null for any other scope. */
-export function scopeFeedId(scope: string): FeedId | null {
-  return scope.startsWith('feed:') ? (scope.slice('feed:'.length) as FeedId) : null
-}

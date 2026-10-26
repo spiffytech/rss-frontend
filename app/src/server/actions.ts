@@ -136,12 +136,6 @@ export const entries = authed(
   },
 )
 
-/** Re-read rows by id — the reader's reconciliation read after a write. */
-export const entriesByIds = authed(async ({ user }, ids: unknown) => {
-  const parsed = parse(z.object({ ids: z.array(z.string()).min(1).max(500) }), { ids })
-  return entriesByIdsFromDb(db(), { userId: user.id, ids: parsed.ids as EntryId[] })
-})
-
 /** Sidebar snapshot. `currentFeed` keeps the open feed named when the sidebar
  *  hides feeds with no unread items. */
 export const panel = authed(async ({ user }, currentFeed: FeedId | null) => {
@@ -230,27 +224,28 @@ export const setStatus = authed(
       ids,
       status,
     })
-    return {
-      changed: markEntries(db(), {
-        userId: user.id,
-        entryIds: parsed.ids as EntryId[],
-        status: parsed.status,
-      }),
-    }
+    const handle = db()
+    markEntries(handle, {
+      userId: user.id,
+      entryIds: parsed.ids as EntryId[],
+      status: parsed.status,
+    })
+    // Answer with the rows as stored: the client applies these instead of
+    // re-reading the window, so a mark-read cannot lose the scroll position.
+    return entriesByIdsFromDb(handle, { userId: user.id, ids: parsed.ids as EntryId[] })
   },
 )
 
 export const setStarred = authed(async ({ user }, ids: unknown, starred: boolean) => {
   const parsed = parse(z.object({ ids: entryIds, starred: z.boolean() }), { ids, starred })
-  return {
-    changed: setStarredInDb(db(), {
-      userId: user.id,
-      entryIds: parsed.ids as EntryId[],
-      starred: parsed.starred,
-    }),
-  }
+  const handle = db()
+  setStarredInDb(handle, {
+    userId: user.id,
+    entryIds: parsed.ids as EntryId[],
+    starred: parsed.starred,
+  })
+  return entriesByIdsFromDb(handle, { userId: user.id, ids: parsed.ids as EntryId[] })
 })
-
 const feedPatchSchema = z
   .object({
     viewMode: z.enum(['expanded', 'list']).optional(),

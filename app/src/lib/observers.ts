@@ -1,36 +1,36 @@
 /**
- * Reading-pane observers: the reading-anchor observer, the scroll sweep and the
- * end-of-list sentinel.
+ * Reading-pane observers: the scroll sweep (auto-read what you scrolled past) and
+ * the end-of-list sentinel.
  *
  * Browser-only, and per page: they read and write the page's reader, which is
  * passed in rather than imported, so nothing here depends on ambient state.
+ *
+ * There is deliberately **no** IntersectionObserver tracking "the card at the
+ * top": that question is answered from geometry when it is asked (see
+ * `anchorIndex` in the reader), because an observer's report lags a fast or
+ * programmatic scroll, and a stale answer made Prev/Next move relative to a card
+ * that had already left the screen.
  */
-import { untrack } from 'solid-js'
-
-import { isScrolledPast, pickTopmostVisible, type TrackedRect } from '../shared/reading'
+import { BAND_FRACTION, isScrolledPast } from '../shared/reading'
 import type { EntryId } from '../shared/ids'
 import type { Reader } from './reader'
-
-/** Height of the reading band at the top of the scroll container, as a fraction. */
-const BAND_FRACTION = 0.15
 
 type Member = { el: HTMLElement; entryId: EntryId }
 
 const members = new Set<Member>()
-const registry = new Map<EntryId, TrackedRect>()
-let observer: IntersectionObserver | null = null
-/** The root the observer was built with; `null` means "viewport", which is wrong. */
-let observerRoot: HTMLElement | null = null
-let initialized = false
-let seenPageGen = 0
 let rafId: number | null = null
-let listening = false
 
 /** The reading pane's scroll container, resolved at use time (it may not exist yet). */
 const scrollContainer = (): HTMLElement | null =>
   document.querySelector<HTMLElement>('[data-testid="entry-scroll"]')
 
-const scheduleSweep = (r: Reader): void => {
+/**
+ * One pass over the cards: anything whose top edge has risen above the reading
+ * band was scrolled past, so the sweep marks it read.
+ *
+ * Call it from the scroll handler. It coalesces to one pass per frame.
+ */
+export const sweep = (r: Reader): void => {
   if (rafId != null) return
   rafId = requestAnimationFrame(() => {
     rafId = null
@@ -51,113 +51,41 @@ const scheduleSweep = (r: Reader): void => {
   })
 }
 
-const onScroll = (r: Reader): void => {
-  // A scroll landing at scrollTop 0 is our own programmatic reset when a fresh
-  // list replaces the old one — not user intent. Without this, opening a feed
-  // arms the auto-read sweep and marks its first entry read.
-  if ((scrollContainer()?.scrollTop ?? 0) !== 0) {
+/**
+ * The one scroll listener for the reading pane: it arms the sweep, records
+ * end-of-list (which gates the idle-time tail recheck) and asks the sweep for a
+ * pass. Capture on the document, because a scroll event does not bubble.
+ *
+ * Returns the cleanup.
+ */
+export const watchScroll = (r: Reader): (() => void) => {
+  const onScroll = (): void => {
+    const container = scrollContainer()
+    if (!container) return
+    // A scroll landing at scrollTop 0 is our own programmatic reset when a fresh
+    // list replaces the old one — not user intent. Without this, opening a feed
+    // arms the auto-read sweep and marks its first entry read.
+    const scrolled = container.scrollTop !== 0
+    const atEnd = container.scrollTop + container.clientHeight >= container.scrollHeight - 200
     r.setSession((draft) => {
-      draft.userHasScrolled = true
+      if (scrolled) draft.userHasScrolled = true
+      draft.atListEnd = atEnd
     })
+    if (scrolled) sweep(r)
   }
-  scheduleSweep(r)
-}
-
-const ensureObserver = (r: Reader): IntersectionObserver => {
-  const container = scrollContainer()
-  if (observer && (observerRoot === container || (observerRoot !== null && container === null))) {
-    return observer
-  }
-  // The first ref runs before the list is in the document, so the container may
-  // not exist yet. Rebuild the observer as soon as it does, instead of keeping a
-  // viewport-rooted one for the life of the page.
-  if (observer) {
-    observer.disconnect()
-    observer = null
-    registry.clear()
-  }
-  observerRoot = container
-  observer = new IntersectionObserver(
-    (batch) => {
-      for (const item of batch) {
-        if (!item.rootBounds) continue
-        const id = item.target.getAttribute('data-track-top')
-        if (!id) continue
-        registry.set(id as EntryId, {
-          top: item.boundingClientRect.top - item.rootBounds.top,
-          bottom: item.boundingClientRect.bottom - item.rootBounds.top,
-        })
-      }
-      if (!initialized) {
-        // First batch after (re)load records geometry only: the list starts
-        // unselected so navigating to a feed never inherits the last anchor.
-        initialized = true
-        return
-      }
-      const best = pickTopmostVisible(registry)
-      if (best != null) {
-        r.setSession((draft) => {
-          draft.currentId = best
-        })
-      }
-    },
-    {
-      // The scroll container, not the viewport: the band is the top slice of the
-      // list the reader is actually looking at, and a viewport-rooted band lands
-      // on the toolbar, where no card ever intersects.
-      root: container,
-      rootMargin: `0px 0px -${Math.round((1 - BAND_FRACTION) * 100)}% 0px`,
-      threshold: 0,
-    },
-  )
-  return observer
-}
-
-let bound: Reader | null = null
-
-const ensureInstalled = (r: Reader): void => {
-  if (listening) return
-  listening = true
-  bound = r
-  document.addEventListener('scroll', () => bound && onScroll(bound), {
-    capture: true,
-    passive: true,
-  })
+  document.addEventListener('scroll', onScroll, { capture: true, passive: true })
+  return () => document.removeEventListener('scroll', onScroll, { capture: true })
 }
 
 /**
- * Track one entry card: geometry for the reading anchor, and membership in the
- * scroll sweep. Call from a `ref` callback; the returned function is the cleanup.
+ * Track one entry card for the sweep. Call from a `ref` callback; the returned
+ * function is the cleanup.
  */
-export const trackEntry = (
-  r: Reader,
-  node: HTMLElement,
-  entryId: EntryId,
-): (() => void) => {
-  ensureInstalled(r)
-  const entries = ensureObserver(r)
-
-  // A new list replaced the old one: re-arm the init guard so the fresh list
-  // starts unselected (currentId stays null until scroll or j).
-  // A ref callback has no tracking scope; this is a compare-and-store, not a
-  // dependency, so the generation is read untracked on purpose.
-  const pageGen = untrack(() => r.session.pageGen)
-  if (seenPageGen !== pageGen) {
-    seenPageGen = pageGen
-    initialized = false
-    registry.clear()
-    members.clear()
-  }
-
-  node.setAttribute('data-track-top', entryId)
-  entries.observe(node)
+export const trackEntry = (node: HTMLElement, entryId: EntryId): (() => void) => {
   const member: Member = { el: node, entryId }
   members.add(member)
-
   return () => {
-    registry.delete(entryId)
     members.delete(member)
-    entries.unobserve(node)
   }
 }
 

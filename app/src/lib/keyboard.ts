@@ -13,8 +13,8 @@ export const attachKeyboard = (
   onToggleViewMode: () => void,
 ): (() => void) => {
   const currentEntry = (): { id: EntryId } | null => {
-    if (!r.session.currentId) return null
-    return r.entries().find((entry) => entry.id === r.session.currentId) ?? null
+    const id = r.currentEntryId()
+    return id == null ? null : { id }
   }
 
   const onKeydown = (event: KeyboardEvent) => {

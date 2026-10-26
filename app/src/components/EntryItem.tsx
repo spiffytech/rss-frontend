@@ -146,7 +146,7 @@ export const EntryItem = (props: { entry: EntrySummary }) => {
         // A ref runs once per element, outside any tracking scope: the id is a
         // one-shot argument here, not a dependency of this element.
         const entryId = untrack(() => props.entry.id)
-        return trackEntry(r, element, entryId)
+        return trackEntry(element, entryId)
       }}
       class={[
         'msgFrame px-3 py-2.5 border-b border-gray-200',

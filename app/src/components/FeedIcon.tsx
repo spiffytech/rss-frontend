@@ -15,20 +15,22 @@ import { useReader } from '../lib/reader-context'
 export const FeedIcon = (props: { feedId: FeedId; title: string }) => {
   const r = useReader()
   const { markIconFailed } = r
-  const failed = () => r.session.iconFailed[props.feedId] === true
+  const src = () => r.iconUrl(props.feedId)
 
   return (
     <span class="inline-flex items-center self-center shrink-0 relative w-5 h-5" aria-hidden="true">
-      <Show when={!failed() && r.hasIcon(props.feedId)}>
-        <img
-          src={`/api/icons/${props.feedId}`}
-          alt=""
-          class="w-5 h-5 rounded-sm"
-          loading="lazy"
-          onError={() => markIconFailed(props.feedId)}
-        />
+      <Show when={src()} keyed>
+        {(url) => (
+          <img
+            src={url}
+            alt=""
+            class="w-5 h-5 rounded-sm"
+            loading="lazy"
+            onError={() => markIconFailed(props.feedId)}
+          />
+        )}
       </Show>
-      <Show when={failed() || !r.hasIcon(props.feedId)}>
+      <Show when={!src()}>
         <span class="absolute inset-0 inline-flex items-center justify-center rounded-sm bg-gray-200 text-gray-600 text-xs font-semibold">
           {(props.title.trim()[0] ?? '?').toUpperCase()}
         </span>
