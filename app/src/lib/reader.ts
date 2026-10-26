@@ -227,6 +227,10 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   const isFavorite = (feedId: FeedId): boolean => prefs.feedPrefs[feedId]?.favorite === true
 
+  /** Does this feed have a stored icon? Without one the browser must not ask. */
+  const hasIcon = (feedId: FeedId): boolean =>
+    panel.allFeeds.find((feed) => feed.id === feedId)?.iconUrl != null
+
   // ---- writes ----
 
   const [writeError, setWriteError] = createSignal<string | null>(null)
@@ -640,6 +644,7 @@ export const createReader = (filter: () => EntriesFilter) => {
     favoriteFeeds,
     favoriteFeedsWithUnread,
     isFavorite,
+    hasIcon,
     toggleFavorite,
     toggleRead,
     toggleExpanded,

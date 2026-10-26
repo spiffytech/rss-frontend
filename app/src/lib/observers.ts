@@ -5,6 +5,8 @@
  * Browser-only, and per page: they read and write the page's reader, which is
  * passed in rather than imported, so nothing here depends on ambient state.
  */
+import { untrack } from 'solid-js'
+
 import { isScrolledPast, pickTopmostVisible, type TrackedRect } from '../shared/reading'
 import type { EntryId } from '../shared/ids'
 import type { Reader } from './reader'
@@ -115,8 +117,11 @@ export const trackEntry = (
 
   // A new list replaced the old one: re-arm the init guard so the fresh list
   // starts unselected (currentId stays null until scroll or j).
-  if (seenPageGen !== r.session.pageGen) {
-    seenPageGen = r.session.pageGen
+  // A ref callback has no tracking scope; this is a compare-and-store, not a
+  // dependency, so the generation is read untracked on purpose.
+  const pageGen = untrack(() => r.session.pageGen)
+  if (seenPageGen !== pageGen) {
+    seenPageGen = pageGen
     initialized = false
     registry.clear()
     members.clear()

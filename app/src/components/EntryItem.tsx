@@ -1,4 +1,4 @@
-import { Show, createEffect, createSignal } from 'solid-js'
+import { Show, createEffect, createSignal, untrack } from 'solid-js'
 
 import type { EntrySummary } from '../shared/types'
 import { timeAgo } from '../shared/util'
@@ -142,7 +142,12 @@ export const EntryItem = (props: { entry: EntrySummary }) => {
     <article
       id={`entry-${props.entry.id}`}
       data-entry-id={props.entry.id}
-      ref={(element) => trackEntry(r, element, props.entry.id)}
+      ref={(element) => {
+        // A ref runs once per element, outside any tracking scope: the id is a
+        // one-shot argument here, not a dependency of this element.
+        const entryId = untrack(() => props.entry.id)
+        return trackEntry(r, element, entryId)
+      }}
       class={[
         'msgFrame px-3 py-2.5 border-b border-gray-200',
         unread() ? 'bg-white' : 'bg-gray-50',

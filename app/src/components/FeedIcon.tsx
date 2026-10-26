@@ -4,7 +4,10 @@ import type { FeedId } from '../shared/ids'
 import { useReader } from '../lib/reader-context'
 
 /**
- * The feed's icon, with a letter fallback when the <img> errors.
+ * The feed's icon, with a letter fallback when there is none or it fails.
+ *
+ * The request is skipped entirely for a feed with no stored icon: asking anyway
+ * turned into a 404 per row, and the error handler did the same fallback anyway.
  *
  * `/api/icons/:id` stays a plain URL endpoint rather than a server function: it
  * is an <img src>, and an <img> cannot speak the RPC protocol.
@@ -16,14 +19,16 @@ export const FeedIcon = (props: { feedId: FeedId; title: string }) => {
 
   return (
     <span class="inline-flex items-center self-center shrink-0 relative w-5 h-5" aria-hidden="true">
-      <img
-        src={`/api/icons/${props.feedId}`}
-        alt=""
-        class={['w-5 h-5 rounded-sm', { hidden: failed() }]}
-        loading="lazy"
-        onError={() => markIconFailed(props.feedId)}
-      />
-      <Show when={failed()}>
+      <Show when={!failed() && r.hasIcon(props.feedId)}>
+        <img
+          src={`/api/icons/${props.feedId}`}
+          alt=""
+          class="w-5 h-5 rounded-sm"
+          loading="lazy"
+          onError={() => markIconFailed(props.feedId)}
+        />
+      </Show>
+      <Show when={failed() || !r.hasIcon(props.feedId)}>
         <span class="absolute inset-0 inline-flex items-center justify-center rounded-sm bg-gray-200 text-gray-600 text-xs font-semibold">
           {(props.title.trim()[0] ?? '?').toUpperCase()}
         </span>
