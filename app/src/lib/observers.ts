@@ -11,6 +11,7 @@ import { isScrolledPast, pickTopmostVisible, type TrackedRect } from '../shared/
 import type { EntryId } from '../shared/ids'
 import type { Reader } from './reader'
 
+/** Height of the reading band at the top of the scroll container, as a fraction. */
 const BAND_FRACTION = 0.15
 
 type Member = { el: HTMLElement; entryId: EntryId }
@@ -18,6 +19,8 @@ type Member = { el: HTMLElement; entryId: EntryId }
 const members = new Set<Member>()
 const registry = new Map<EntryId, TrackedRect>()
 let observer: IntersectionObserver | null = null
+/** The root the observer was built with; `null` means "viewport", which is wrong. */
+let observerRoot: HTMLElement | null = null
 let initialized = false
 let seenPageGen = 0
 let rafId: number | null = null
@@ -61,7 +64,19 @@ const onScroll = (r: Reader): void => {
 }
 
 const ensureObserver = (r: Reader): IntersectionObserver => {
-  if (observer) return observer
+  const container = scrollContainer()
+  if (observer && (observerRoot === container || (observerRoot !== null && container === null))) {
+    return observer
+  }
+  // The first ref runs before the list is in the document, so the container may
+  // not exist yet. Rebuild the observer as soon as it does, instead of keeping a
+  // viewport-rooted one for the life of the page.
+  if (observer) {
+    observer.disconnect()
+    observer = null
+    registry.clear()
+  }
+  observerRoot = container
   observer = new IntersectionObserver(
     (batch) => {
       for (const item of batch) {
@@ -86,7 +101,14 @@ const ensureObserver = (r: Reader): IntersectionObserver => {
         })
       }
     },
-    { rootMargin: '0px 0px -95% 0px', threshold: 0 },
+    {
+      // The scroll container, not the viewport: the band is the top slice of the
+      // list the reader is actually looking at, and a viewport-rooted band lands
+      // on the toolbar, where no card ever intersects.
+      root: container,
+      rootMargin: `0px 0px -${Math.round((1 - BAND_FRACTION) * 100)}% 0px`,
+      threshold: 0,
+    },
   )
   return observer
 }

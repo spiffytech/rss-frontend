@@ -1049,3 +1049,65 @@ it("a reading session raises no page faults", async () => {
     await view.close();
   }
 }, 60_000);
+
+it("prev/next move relative to the card in view, without waiting on a write", async () => {
+  // Two regressions here, both from the button path:
+  //  - the anchor came from an IntersectionObserver that was rooted at the
+  //    viewport (so it never fired) and the buttons indexed from -1, which sent a
+  //    scrolled-down reader back to the top of the list;
+  //  - the scroll ran in an effect whose flush can be deferred behind the
+  //    mark-read write, so the view moved only after the server answered.
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    // Shared fixture: earlier tests read everything and may leave hide-read on, so
+    // start from a known list rather than from whatever they left behind.
+    restoreUnread();
+    await openFeedView(view);
+    const cards = (await view.evaluate(
+      until('const n = document.querySelectorAll("[data-entry-id]").length; return n > 5 ? n : 0'),
+    )) as number;
+    expect(cards).toBeGreaterThan(5);
+
+    // The same band the app uses: the first card reaching the top 15% of the list.
+    const anchor = `(() => {
+      const el = document.querySelector('[data-testid="entry-scroll"]')
+      const cards = [...document.querySelectorAll('[data-entry-id]')]
+      const bandTop = el.getBoundingClientRect().top + el.clientHeight * 0.15
+      const index = cards.findIndex((c) => c.getBoundingClientRect().bottom > bandTop)
+      return JSON.stringify({ index, top: Math.round(el.scrollTop) })
+    })()`;
+    const at = async () => JSON.parse((await view.evaluate(anchor)) as string) as { index: number; top: number };
+
+    // Start well down the list, the way a reader arrives after scrolling by hand.
+    await view.evaluate(`
+      (() => {
+        const el = document.querySelector('[data-testid="entry-scroll"]')
+        const card = document.querySelectorAll('[data-entry-id]')[4]
+        el.scrollTop = el.scrollTop + (card.getBoundingClientRect().top - el.getBoundingClientRect().top)
+        return el.scrollTop
+      })()
+    `);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const before = await at();
+
+    await view.click('[aria-label="Next entry (j)"]');
+    // Short wait on purpose: a scroll that waits for the write takes longer.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const next = await at();
+    expect(next.index).toBe(before.index + 1);
+    expect(next.top).toBeGreaterThan(before.top);
+
+    await view.click('[aria-label="Next entry (j)"]');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const twice = await at();
+    expect(twice.index).toBe(before.index + 2);
+
+    await view.click('[aria-label="Previous entry (k)"]');
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    const back = await at();
+    expect(back.index).toBe(before.index + 1);
+  } finally {
+    await view.close();
+  }
+}, 60_000);

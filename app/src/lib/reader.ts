@@ -38,6 +38,7 @@ import {
   type UserPrefs,
 } from '../shared/prefs'
 import { shouldAutoRead } from '../shared/reading'
+import { scrollToEntry } from './nav'
 
 /** The RPC boundary takes JSON: hand it plain data, never a store proxy. */
 const wire = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T
@@ -357,16 +358,43 @@ export const createReader = (filter: () => EntriesFilter) => {
     autoRead(entryId, false, { ignoreFeedSetting: true, explicit: true })
   }
 
+  /**
+   * Index of the card at the top of the reading band, read from the DOM.
+   *
+   * Geometry rather than `session.currentId`: that one is fed by an
+   * IntersectionObserver, which lags a fast or programmatic scroll, and a stale
+   * anchor made Prev/Next move relative to an entry that had already left the
+   * screen. The band matches the sweep's (top {@link BAND_FRACTION} of the list).
+   */
+  const anchorIndex = (): number => {
+    const container = document.querySelector('[data-testid="entry-scroll"]')
+    const list = entries()
+    if (!(container instanceof HTMLElement)) {
+      const known = session.currentId ? list.findIndex((entry) => entry.id === session.currentId) : 0
+      return known < 0 ? 0 : known
+    }
+    const bandTop = container.getBoundingClientRect().top + container.clientHeight * 0.15
+    for (let index = 0; index < list.length; index++) {
+      const el = document.getElementById(`entry-${list[index]!.id}`)
+      if (!el) continue
+      if (el.getBoundingClientRect().bottom > bandTop) return index
+    }
+    return list.length - 1
+  }
+
   const moveAndRead = (delta: 1 | -1): void => {
     const ids = entries().map((entry) => entry.id)
     if (ids.length === 0) return
-    const currentIndex = session.currentId ? ids.indexOf(session.currentId) : -1
+    const currentIndex = anchorIndex()
     const nextIndex = Math.max(0, Math.min(ids.length - 1, currentIndex + delta))
     const nextId = ids[nextIndex]!
     setSession((draft) => {
       draft.currentId = nextId
       draft.navRequest = nextId
     })
+    // Instant, and before the write: an effect would scroll on its own schedule,
+    // which puts the server round trip in front of the view moving.
+    scrollToEntry(nextId)
     autoRead(nextId)
   }
 
