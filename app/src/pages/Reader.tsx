@@ -1,7 +1,7 @@
 import { Loading, Show, createEffect, createMemo, createSignal, onSettled } from "solid-js";
 import { useLocation } from "@solidjs/router";
 
-import { parseFilterFromUrl } from "../shared/filter";
+import { hasView as sharedHasView, parseFilterFromUrl } from "../shared/filter";
 import type { EntriesFilter } from "../shared/filter";
 import { attachKeyboard } from "../lib/keyboard";
 import { scrollToEntry } from "../lib/nav";
@@ -53,12 +53,8 @@ export const ReaderPage = () => {
   const [isDesktop, setIsDesktop] = createSignal(false);
   const [sidebarOpen, setSidebarOpen] = createSignal(false);
 
-  /** Does the URL name a view (feed, category, section, search)? If not, we are
-   *  on the home page. */
-  const hasView = (): boolean => {
-    const active = filter();
-    return Boolean(active.feedId || active.categoryId || active.starred || active.search);
-  };
+  /** A URL with no identity filter is the home page. */
+  const hasView = (): boolean => sharedHasView(filter());
 
   let scrollEl: HTMLDivElement | undefined;
 

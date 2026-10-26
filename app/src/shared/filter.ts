@@ -28,6 +28,15 @@ export const zodEntriesFilter = z.object({
 export type EntriesFilter = z.infer<typeof zodEntriesFilter>
 
 /**
+ * Does this filter name a view (feed, category, section or search)?
+ *
+ * A filter with no identity is the home page, which lists favorites out of the
+ * panel — it has no entries to page, so nothing may ask the server for a window.
+ */
+export const hasView = (filter: EntriesFilter): boolean =>
+  Boolean(filter.feedId || filter.categoryId || filter.starred || filter.search)
+
+/**
  * Parse the identity filter from URL query params
  * (e.g. ?feed=<uuid>&starred=1&search=x). View prefs (view/sort/hideReadItems)
  * are NOT in the URL — they come from the per-account store during load.

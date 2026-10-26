@@ -27,7 +27,7 @@ import {
 } from 'solid-js'
 
 import * as api from '../server/actions'
-import type { EntriesFilter } from '../shared/filter'
+import { hasView, type EntriesFilter } from '../shared/filter'
 import type { CategoryId, EntryId, FeedId } from '../shared/ids'
 import {
   DEFAULT_HIDE_EMPTY_FEEDS,
@@ -123,6 +123,12 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   const currentFeedId = (): FeedId | null => (filter().feedId as FeedId | undefined) ?? null
 
+  /** The URL's view: the key the list's derive resets on. Declared before the
+   *  projections, because hydration can run a derive while this body is still
+   *  executing (a `const` below would be in its temporal dead zone). */
+  const queryFilter = createMemo<EntriesFilter>(() => filter())
+  const viewKey = createMemo(() => identity(filter()))
+
   // ---- server data ----
   /**
    * The list, as a projection in its *draft* form: the derive receives what is
@@ -138,6 +144,15 @@ export const createReader = (filter: () => EntriesFilter) => {
       const wanted = session.wanted
       const dirty = [...session.dirtyIds]
       const gen = session.listGen
+      // No view (the home page) means no window to read: asking would be a
+      // request for entries with no filter, which the server refuses.
+      if (!hasView(filter())) {
+        draft.viewKey = key
+        draft.gen = gen
+        draft.entries = []
+        draft.nextCursor = null
+        return
+      }
       // A different view — or a request to re-read from the top — starts over.
       if (draft.viewKey !== key || draft.gen !== gen) {
         draft.viewKey = key
@@ -393,19 +408,18 @@ export const createReader = (filter: () => EntriesFilter) => {
   // A new view means a new list. Keyed on the URL filter (a string), not on the
   // projection's value: that would re-fire on every read and loop, because the
   // reset writes the projection's own inputs.
-  /** The URL's view. */
-  const queryFilter = createMemo<EntriesFilter>(() => filter())
-  const viewKey = createMemo(() => identity(filter()))
   createEffect(viewKey, () => {
     setSession((draft) => {
       draft.currentId = null
       draft.navRequest = null
       draft.userHasScrolled = false
-      draft.keepUnreadIds = []
-      draft.expandedIds = []
+      // Write only what changes: a fresh `[]` invalidates the list's derive,
+      // which then reads a window for a view the reader has not opened.
+      if (draft.keepUnreadIds.length > 0) draft.keepUnreadIds = []
+      if (draft.expandedIds.length > 0) draft.expandedIds = []
       draft.viewModeOverride = null
       draft.wanted = PAGE_SIZE
-      draft.dirtyIds = []
+      if (draft.dirtyIds.length > 0) draft.dirtyIds = []
       draft.listGen = 0
       draft.pageGen++
     })

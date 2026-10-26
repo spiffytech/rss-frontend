@@ -31,7 +31,19 @@ export const EntryList = () => {
           // Observe after mount, not in the ref: a ref runs before the element is
           // in the document, so looking up the scroll root there finds nothing
           // and the sentinel never intersects.
-          onSettled(() => observeSentinel(element, onSentinel))
+          //
+          // The cleanup belongs to the ref, not to `onSettled`: a ref callback has
+          // no owner, and returning a cleanup from `onSettled` there throws
+          // SETTLED_CLEANUP_UNOWNED — which halts the reactive system in dev.
+          let stop: (() => void) | undefined
+          let cancelled = false
+          onSettled(() => {
+            if (!cancelled) stop = observeSentinel(element, onSentinel)
+          })
+          return () => {
+            cancelled = true
+            stop?.()
+          }
         }}
       />
     </div>
