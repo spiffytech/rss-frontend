@@ -508,13 +508,20 @@ it("reading behaviours: windowing, auto-read on scroll, and click semantics", as
 
     // Scrolling to the sentinel pulls the next window (old pagination.spec).
     // Target the sentinel itself: the list's 100dvh bottom padding sits below
-    // it, so jumping to scrollHeight overshoots the observer's rootMargin.
+    // it, so jumping to scrollHeight overshoots the observer's rootMargin. Keep
+    // nudging it into view — card heights shift as bodies land, so one computed
+    // position sometimes leaves the sentinel just outside the margin.
     const scrolled = (await view.evaluate(`
-        (() => {
+        (async () => {
           const el = document.querySelector('[data-testid="entry-scroll"]')
-          const s = document.getElementById('entry-sentinel')
-          const top = s.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
-          el.scrollTop = top - el.clientHeight + 100
+          for (let i = 0; i < 20 && document.querySelectorAll('article').length <= 100; i++) {
+            const s = document.getElementById('entry-sentinel')
+            if (s) {
+              const top = s.getBoundingClientRect().top - el.getBoundingClientRect().top + el.scrollTop
+              el.scrollTop = top - el.clientHeight + 100
+            }
+            await new Promise((r) => setTimeout(r, 100))
+          }
           return Math.round(el.scrollTop)
         })()
       `)) as number;
@@ -1021,6 +1028,55 @@ it("clicking through feeds keeps working: navigation is not a one-shot", async (
     // Different feeds, not the same one three times.
     expect(new Set(visited).size).toBe(visited.length);
     expect(await faults(view)).toEqual([]);
+  } finally {
+    await view.close();
+  }
+}, 60_000);
+
+
+it("one view costs one round trip of server calls, not one per row", async () => {
+  // The regression this exists for: entry bodies used to be fetched per card, so
+  // opening a feed fired ~100 requests to paint one screen. Every other test in
+  // this file passed while that was true — the screen was correct, just expensive.
+  const view = new Bun.WebView({ width: 1100, height: 800 });
+  try {
+    await signIn(view);
+    await view.navigate(`${BASE}/`);
+    await view.evaluate(
+      until('return document.querySelectorAll(".app-sidebar a").length > 3 ? 1 : 0', 30_000),
+    );
+
+    const feedHref = (await view.evaluate(
+      `[...document.querySelectorAll('.app-sidebar a')].map((a) => a.getAttribute('href') || '').find((href) => href.includes('feed=')) || ''`,
+    )) as string;
+    expect(feedHref).not.toBe('');
+
+    const report = (await view.evaluate(`
+      (async () => {
+        performance.clearResourceTimings()
+        const link = [...document.querySelectorAll('.app-sidebar a')]
+          .find((a) => a.getAttribute('href') === ${JSON.stringify(feedHref)})
+        link.click()
+        const deadline = Date.now() + 15000
+        while (Date.now() < deadline) {
+          if (document.querySelectorAll('article').length > 0) break
+          await new Promise((r) => setTimeout(r, 50))
+        }
+        await new Promise((r) => setTimeout(r, 500))
+        const calls = performance.getEntriesByType('resource')
+          .filter((e) => e.name.includes('/_server'))
+          .map((e) => e.name.split('/_server/data/')[1]?.split('-')[0] || e.name)
+        return JSON.stringify({ rows: document.querySelectorAll('article').length, calls })
+      })()
+    `)) as string;
+    const { rows, calls } = JSON.parse(report) as { rows: number; calls: string[] };
+
+    console.log("server calls for one feed view:", calls);
+    expect(rows).toBeGreaterThan(0);
+    // The view's entries and the sidebar: two reads, plus slack for one more.
+    expect(calls.length).toBeLessThanOrEqual(3);
+    // Nothing may be fetched per row.
+    expect(calls).not.toContain('content');
   } finally {
     await view.close();
   }
