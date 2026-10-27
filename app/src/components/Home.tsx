@@ -60,7 +60,7 @@ export const Home = () => {
                       data-testid="home-favorite-count"
                       class="shrink-0 text-xs text-gray-500 tabular-nums"
                     >
-                      {r.panel.counters[feed.id] ?? 0}
+                      {r.counterFor(feed.id)}
                     </span>
                   </span>
                 </a>

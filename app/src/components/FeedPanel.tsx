@@ -25,6 +25,10 @@ export const FeedPanel = () => {
 
   // Case-insensitive order inside each folder (the server hands them over in
   // SQLite's binary collation order, which puts every capital letter first).
+  /** A folder's total is the sum of the feed counts under it, not a separate number. */
+  const categoryUnread = (categoryId: string): number =>
+    (feedsByCategory().get(categoryId) ?? []).reduce((total, feed) => total + r.counterFor(feed.id), 0)
+
   const feedsByCategory = createMemo(() => {
     const map = new Map<string, FeedInfo[]>()
     const sorted = [...r.panel.feeds].sort((a, b) => compareTitlesCI(a.title, b.title))
@@ -60,7 +64,7 @@ export const FeedPanel = () => {
 
   const showCategory = (catFeeds: FeedInfo[]): boolean => {
     if (!hideEmptyFeeds()) return true
-    const hasUnread = catFeeds.some((feed) => (r.panel.counters[feed.id] ?? 0) > 0)
+    const hasUnread = catFeeds.some((feed) => (r.counterFor(feed.id)) > 0)
     const hasActive = catFeeds.some((feed) => r.filter().feedId === feed.id)
     return hasUnread || hasActive
   }
@@ -148,7 +152,7 @@ export const FeedPanel = () => {
                         data-testid="feed-count"
                         class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0"
                       >
-                        {category.totalUnread}
+                        {categoryUnread(category.id)}
                       </span>
                       <button
                         type="button"
@@ -172,7 +176,7 @@ export const FeedPanel = () => {
                             {
                               hidden:
                                 hideEmptyFeeds() &&
-                                (r.panel.counters[feed.id] ?? 0) === 0 &&
+                                (r.counterFor(feed.id)) === 0 &&
                                 !isActiveFeed(feed.id),
                             },
                           ]}
@@ -219,7 +223,7 @@ export const FeedPanel = () => {
                               data-testid="feed-count"
                               class="text-xs text-gray-500 transition-opacity duration-150 group-hover:delay-250 group-hover:opacity-0"
                             >
-                              {r.panel.counters[feed.id] ?? 0}
+                              {r.counterFor(feed.id)}
                             </span>
                             <button
                               type="button"
