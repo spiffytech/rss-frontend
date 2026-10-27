@@ -990,13 +990,17 @@ it("clicking through feeds keeps working: navigation is not a one-shot", async (
     await watchForFaults(view);
 
     const visited: string[] = [];
-    for (const index of [1, 2, 3]) {
-      const target = (await view.evaluate(
-        `(() => { const a = document.querySelectorAll('.app-sidebar a')[${index}]; return a ? a.getAttribute('href') : '' })()`,
-      )) as string;
-      expect(target).not.toBe("");
+    // By href, not by position: the sidebar also carries section links (Home,
+    // Starred), which have no entries of their own to land in.
+    const feedLinks = (await view.evaluate(
+      `[...document.querySelectorAll('.app-sidebar a')].map((a) => a.getAttribute('href') || '').filter((href) => href.includes('feed=')).slice(0, 3)`,
+    )) as string[];
+    expect(feedLinks.length).toBe(3);
 
-      await view.evaluate(`document.querySelectorAll('.app-sidebar a')[${index}].click()`);
+    for (const target of feedLinks) {
+      await view.evaluate(
+        `[...document.querySelectorAll('.app-sidebar a')].find((a) => a.getAttribute('href') === ${JSON.stringify(target)}).click()`,
+      );
       const landed = (await view.evaluate(
         until(
           `const want = ${JSON.stringify(target)}; return location.pathname + location.search === want ? want : ''`,

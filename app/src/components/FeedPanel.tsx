@@ -4,6 +4,7 @@ import { useNavigate } from '@solidjs/router'
 import type { FeedId } from '../shared/ids'
 import type { FeedInfo } from '../shared/types'
 import { DEFAULT_HIDE_EMPTY_FEEDS } from '../shared/prefs'
+import { hasView } from '../shared/filter'
 import { compareTitlesCI } from '../shared/util'
 import { autofocus } from '../lib/observers'
 import { useReader } from '../lib/reader-context'
@@ -111,6 +112,21 @@ export const FeedPanel = () => {
       <div class="mb-1">
         <h2 class="font-semibold text-sm mb-1">Sections</h2>
         <ul class="text-sm">
+          <li>
+            {/* No filter means the home page. It is first because it is the way
+                back out of any feed — the toolbar title does this on desktop, but
+                on mobile the title is hidden and this list is the only nav. */}
+            <a
+              href="/"
+              data-testid="home-link"
+              class={[
+                'w-full text-left px-2 py-1 rounded hover:bg-gray-100 flex justify-between items-center',
+                { 'bg-gray-100': !hasView(r.filter()) },
+              ]}
+            >
+              <span>Home</span>
+            </a>
+          </li>
           <li>
             <a
               href={link({ starred: 1 })}

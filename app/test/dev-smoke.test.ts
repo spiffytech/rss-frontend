@@ -158,12 +158,16 @@ it(
       `);
 
       const visited: string[] = [];
-      for (const index of [1, 2, 3]) {
-        const target = (await view.evaluate(
-          `(() => { const a = document.querySelectorAll('.app-sidebar a')[${index}]; return a ? a.getAttribute('href') : '' })()`,
-        )) as string;
-        expect(target).not.toBe("");
-        await view.evaluate(`document.querySelectorAll('.app-sidebar a')[${index}].click()`);
+      // Feed links only: the sidebar's section links (Home, Starred) are views
+      // with no entries to land in, and position is not what this is testing.
+      const feedLinks = (await view.evaluate(
+        `[...document.querySelectorAll('.app-sidebar a')].map((a) => a.getAttribute('href') || '').filter((href) => href.includes('feed=')).slice(0, 3)`,
+      )) as string[];
+      expect(feedLinks.length).toBe(3);
+      for (const target of feedLinks) {
+        await view.evaluate(
+          `[...document.querySelectorAll('.app-sidebar a')].find((a) => a.getAttribute('href') === ${JSON.stringify(target)}).click()`,
+        );
         const landed = (await view.evaluate(
           until(
             `const want = ${JSON.stringify(target)}; return location.pathname + location.search === want ? want : ''`,
