@@ -166,7 +166,7 @@ export function entriesByIds(
 export function panel(
   db: Db,
   opts: { userId: UserId; hideEmptyFeeds: boolean; currentFeed?: FeedId | null },
-): FeedPanelResult {
+): Omit<FeedPanelResult, 'userPrefs' | 'feedPrefs'> {
   const feedRows = db
     .select({
       id: feeds.id,

@@ -191,10 +191,6 @@ export const createReader = (filter: () => EntriesFilter) => {
     () => api.viewPanel(currentFeedId()),
     null,
   )
-  const [prefs, setPrefs] = createOptimisticStore<{
-    userPrefs: UserPrefs
-    feedPrefs: Record<FeedId, FeedPrefs>
-  }>(() => api.viewPrefs(), null)
 
   const entries = (): EntrySummary[] => page.entries
 
@@ -202,7 +198,7 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   const effectiveViewMode = (): 'expanded' | 'list' =>
     session.viewModeOverride ??
-    (currentFeedId() ? prefs.feedPrefs[currentFeedId()!]?.viewMode : undefined) ??
+    (currentFeedId() ? panel.feedPrefs[currentFeedId()!]?.viewMode : undefined) ??
     DEFAULT_VIEW_MODE
 
   const currentTitle = (): string => {
@@ -239,12 +235,12 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   const favoriteFeeds = () =>
     panel.allFeeds
-      .filter((feed) => prefs.feedPrefs[feed.id]?.favorite === true)
+      .filter((feed) => panel.feedPrefs[feed.id]?.favorite === true)
       .sort((a, b) => compareTitlesCI(a.title, b.title))
 
   const favoriteFeedsWithUnread = () => favoriteFeeds().filter((feed) => counterFor(feed.id) > 0)
 
-  const isFavorite = (feedId: FeedId): boolean => prefs.feedPrefs[feedId]?.favorite === true
+  const isFavorite = (feedId: FeedId): boolean => panel.feedPrefs[feedId]?.favorite === true
 
   /** Where this feed's icon can be fetched, or `null` for "show the letter". */
   const iconUrl = (feedId: FeedId): string | null => {
@@ -274,7 +270,6 @@ export const createReader = (filter: () => EntriesFilter) => {
       })
       refresh(page)
       refresh(panel)
-      refresh(prefs)
     }
   }
 
@@ -398,12 +393,12 @@ export const createReader = (filter: () => EntriesFilter) => {
     if (filter().search) return
     const entry = entries().find((candidate) => candidate.id === entryId)
     if (!entry || entry.status === 'read') return
-    const feedPrefs = currentFeedId() ? prefs.feedPrefs[currentFeedId()!] : undefined
+    const feedPrefs = currentFeedId() ? panel.feedPrefs[currentFeedId()!] : undefined
     if (
       !shouldAutoRead({
         viewMode: session.viewModeOverride ?? feedPrefs?.viewMode ?? DEFAULT_VIEW_MODE,
         userHasScrolled: viaScroll ? session.userHasScrolled : true,
-        disabledAutoReadFeeds: (prefs.userPrefs.disabledAutoReadFeeds ?? []) as FeedId[],
+        disabledAutoReadFeeds: (panel.userPrefs.disabledAutoReadFeeds ?? []) as FeedId[],
         keepUnreadIds: session.keepUnreadIds,
         feedId: entry.feedId,
         entryId,
@@ -564,11 +559,13 @@ export const createReader = (filter: () => EntriesFilter) => {
     if (!feedId) return
     void runWrite('save that preference', () =>
       action(function* () {
-        setPrefs((draft) => {
+        setPanel((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], viewMode }
         })
         yield api.setPrefs(feedId, { viewMode })
-        refresh(prefs)
+        // Re-produce the prefs, or the optimistic write above is discarded at
+        // commit and the control snaps back.
+        refresh(panel)
       })(),
     )
   }
@@ -578,11 +575,11 @@ export const createReader = (filter: () => EntriesFilter) => {
     if (!feedId) return
     void runWrite('save that sort order', () =>
       action(function* () {
-        setPrefs((draft) => {
+        setPanel((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], sort }
         })
         yield api.setPrefs(feedId, { sort })
-        refresh(prefs)
+        refresh(panel)
         refresh(page)
       })(),
     )
@@ -593,40 +590,39 @@ export const createReader = (filter: () => EntriesFilter) => {
     if (!feedId) return
     void runWrite('save that preference', () =>
       action(function* () {
-        setPrefs((draft) => {
+        setPanel((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], hideReadItems }
         })
         yield api.setPrefs(feedId, { hideReadItems })
-        refresh(prefs)
+        refresh(panel)
         refresh(page)
       })(),
     )
   }
 
   const toggleHideEmptyFeeds = (): void => {
-    const next = !(prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
+    const next = !(panel.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
     void runWrite('save that preference', () =>
       action(function* () {
-        setPrefs((draft) => {
+        setPanel((draft) => {
           draft.userPrefs = { ...draft.userPrefs, hideEmptyFeeds: next }
         })
         yield api.setPrefs(null, { hideEmptyFeeds: next })
-        refresh(prefs)
         refresh(panel)
       })(),
     )
   }
 
   const toggleAutoRead = (feedId: FeedId): void => {
-    const list = prefs.userPrefs.disabledAutoReadFeeds ?? []
+    const list = panel.userPrefs.disabledAutoReadFeeds ?? []
     const next = list.includes(feedId) ? list.filter((id) => id !== feedId) : [...list, feedId]
     void runWrite('save that preference', () =>
       action(function* () {
-        setPrefs((draft) => {
+        setPanel((draft) => {
           draft.userPrefs = { ...draft.userPrefs, disabledAutoReadFeeds: next }
         })
         yield api.setPrefs(null, { disabledAutoReadFeeds: next })
-        refresh(prefs)
+        refresh(panel)
       })(),
     )
   }
@@ -635,11 +631,11 @@ export const createReader = (filter: () => EntriesFilter) => {
     const next = !isFavorite(feedId)
     void runWrite('save that preference', () =>
       action(function* () {
-        setPrefs((draft) => {
+        setPanel((draft) => {
           draft.feedPrefs[feedId] = { ...draft.feedPrefs[feedId], favorite: next }
         })
         yield api.setPrefs(feedId, { favorite: next })
-        refresh(prefs)
+        refresh(panel)
       })(),
     )
   }
@@ -743,8 +739,6 @@ export const createReader = (filter: () => EntriesFilter) => {
     setPage,
     panel,
     setPanel,
-    prefs,
-    setPrefs,
     session,
     setSession,
     currentTitle,

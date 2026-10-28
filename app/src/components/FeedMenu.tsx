@@ -51,7 +51,7 @@ export const FeedMenu = () => {
   const isFeedView = () => feedId() != null && feedId() !== "";
   const searchActive = () => Boolean(r.filter().search);
   const autoReadOff = () =>
-    (r.prefs.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
+    (r.panel.userPrefs.disabledAutoReadFeeds ?? []).includes(feedId() as FeedId);
 
   const [renameOpen, setRenameOpen] = createSignal(false);
 
@@ -315,16 +315,16 @@ export const FeedMenu = () => {
                   class={[
                     "menu-row",
                     {
-                      [TOGGLE_ON]: r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+                      [TOGGLE_ON]: r.panel.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
                     },
                   ]}
                   aria-pressed={
-                    (r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? "true" : "false"
+                    (r.panel.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS) ? "true" : "false"
                   }
                   onClick={onHideEmptyFeeds}
                 >
                   Empty feeds:{" "}
-                  {(r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
+                  {(r.panel.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS)
                     ? "hidden"
                     : "shown"}
                 </button>

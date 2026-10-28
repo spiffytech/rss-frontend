@@ -110,18 +110,17 @@ export const viewEntries = authed(
 
 export const viewPanel = authed(async ({ user }, currentFeed: FeedId | null) => {
   const handle = db()
+  // One read of each prefs table, carrying what the sidebar and the reading
+  // controls need. This used to be a second call (`viewPrefs`) that re-read both
+  // tables the entries read and this one had already loaded.
   const userPrefs = getUserPrefs(handle, user.id)
-  return panelFromDb(handle, {
-    userId: user.id,
-    hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
-    currentFeed: currentFeed ?? null,
-  })
-})
-
-export const viewPrefs = authed(async ({ user }) => {
-  const handle = db()
   return {
-    userPrefs: getUserPrefs(handle, user.id),
+    ...panelFromDb(handle, {
+      userId: user.id,
+      hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
+      currentFeed: currentFeed ?? null,
+    }),
+    userPrefs,
     feedPrefs: getAllFeedPrefs(handle, user.id),
   }
 })

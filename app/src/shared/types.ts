@@ -60,6 +60,11 @@ export type FeedPanelResult = {
   categories: CategoryCount[]
   /** Unread counts per feed — same filter predicate as the lists. */
   counters: Record<FeedId, number>
+  /** Account-level preferences. Read by the same call, because the panel is what
+   *  they act on (hide-empty) and the sidebar renders them. */
+  userPrefs: UserPrefs
+  /** Per-feed preferences (favourite, view mode, sort, hide-read). */
+  feedPrefs: Record<FeedId, FeedPrefs>
 }
 
 export type EntriesResult = {

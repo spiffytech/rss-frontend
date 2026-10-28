@@ -61,7 +61,7 @@ export const FeedPanel = () => {
   const isRenamingCategory = (categoryId: string) =>
     r.session.renameId === categoryId && r.session.renameKind === 'category'
 
-  const hideEmptyFeeds = () => r.prefs.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS
+  const hideEmptyFeeds = () => r.panel.userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS
 
   const showCategory = (catFeeds: FeedInfo[]): boolean => {
     if (!hideEmptyFeeds()) return true
