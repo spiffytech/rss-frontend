@@ -82,11 +82,11 @@ export const ReaderPage = () => {
     },
   );
 
-  // A new view starts at the top. Keyed on the view's identity rather than a
-  // counter: the URL changing is the event, and a second counter could only ever
-  // say the same thing.
+  // The list is replaced in exactly two cases, and both mean "start at the top":
+  // you opened a different view, or you asked for a refresh (`listGen`). Keyed on
+  // those, not on a separate counter — the events are the state.
   createEffect(
-    () => r.viewKey(),
+    () => [r.viewKey(), r.session.listGen] as const,
     () => {
       if (scrollEl) scrollEl.scrollTop = 0;
     },

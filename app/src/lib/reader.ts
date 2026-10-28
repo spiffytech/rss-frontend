@@ -765,23 +765,23 @@ export const createReader = (filter: () => EntriesFilter) => {
     pollTimer = undefined
   }
 
+  /**
+   * Keep the sidebar honest on a long-lived tab.
+   *
+   * Polls the panel only. It used to reload the list as well when you had reached
+   * the end, which replaced the rows under you: new entries arrive at the *top*,
+   * so the window you were reading had to be pushed down or thrown away. The list
+   * now changes only when you ask it to — navigate, scroll for more, or Refresh
+   * feeds, which restarts it and takes you to the top.
+   */
   const startIdleRefresh = (): (() => void) => {
     if (pollTimer) return stopIdleRefresh
-    pollTimer = setInterval(() => {
-      refresh(panel)
-      // Only when the reader has reached the end: mid-scroll, the list is theirs.
-      if (session.atListEnd) {
-        setSession((draft) => {
-          draft.listGen++
-        })
-        refresh(page)
-      }
-    }, POLL_MS)
+    pollTimer = setInterval(() => refresh(panel), POLL_MS)
     return stopIdleRefresh
   }
 
   return {
-    /** Identity of the current view; the page scrolls to the top when it changes. */
+    /** Identity of the current view. */
     viewKey,
     entries,
     counterFor,
