@@ -149,12 +149,10 @@ export const FeedMenu = () => {
   const onRefresh = () => runAndClose(() => refreshFeeds());
   const onViewMode = () =>
     runAndClose(() => setViewMode(effectiveViewMode() === "expanded" ? "list" : "expanded"));
-  const onSort = () =>
-    runAndClose(() => setSort((r.filter().sort ?? "oldest") === "newest" ? "oldest" : "newest"));
+  const onSort = () => runAndClose(() => setSort(r.sortOrder() === "newest" ? "oldest" : "newest"));
   const onToggleAutoRead = () => runAndClose(() => toggleAutoRead(feedId() as FeedId));
   const onHideEmptyFeeds = () => runAndClose(() => toggleHideEmptyFeeds());
-  const onHideReadItems = () =>
-    runAndClose(() => setHideReadItems(!(r.filter().hideReadItems ?? true)));
+  const onHideReadItems = () => runAndClose(() => setHideReadItems(!r.hidesReadItems()));
   const onClearSearch = () => runAndClose(() => search.clearSearch());
 
   // The editor's text lives in the reader's session, so the sidebar and this
@@ -294,10 +292,7 @@ export const FeedMenu = () => {
                 </button>
                 <Show when={isFeedView() && !searchActive()}>
                   <button type="button" class="menu-row" onClick={onSort}>
-                    Sort:{" "}
-                    {(r.filter().sort ?? "oldest") === "oldest"
-                      ? "oldest first"
-                      : "newest first"}
+                    Sort: {r.sortOrder() === "oldest" ? "oldest first" : "newest first"}
                   </button>
                 </Show>
                 <Show when={isFeedView()}>
@@ -331,11 +326,11 @@ export const FeedMenu = () => {
                 <Show when={!searchActive()}>
                   <button
                     type="button"
-                    class={["menu-row", { [TOGGLE_ON]: r.filter().hideReadItems ?? true }]}
-                    aria-pressed={(r.filter().hideReadItems ?? true) ? "true" : "false"}
+                    class={["menu-row", { [TOGGLE_ON]: r.hidesReadItems() }]}
+                    aria-pressed={r.hidesReadItems() ? "true" : "false"}
                     onClick={onHideReadItems}
                   >
-                    Read items: {(r.filter().hideReadItems ?? true) ? "hidden" : "shown"}
+                    Read items: {r.hidesReadItems() ? "hidden" : "shown"}
                   </button>
                 </Show>
               </div>

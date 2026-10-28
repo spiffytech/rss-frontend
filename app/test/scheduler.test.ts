@@ -33,7 +33,7 @@ const bounds: PlanBounds = {
 const FID = 'feed-a' as FeedId
 
 function input(over: Partial<FeedInput> = {}): FeedInput {
-  return { feedId: FID, stamps: [], dayCounts: new Map(), medGapMinutes: null, ...over }
+  return { feedId: FID, stamps: [], dayCounts: new Map(), ...over }
 }
 
 function steady(stampsPerDay: number, days = 90): FeedInput {

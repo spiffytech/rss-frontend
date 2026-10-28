@@ -20,10 +20,20 @@ let destination: EntryId | null = null
 /** The card the current scroll is heading for, or null when at rest. */
 export const navTarget = (): EntryId | null => destination
 
-const scrollerFor = (el: HTMLElement): HTMLElement | null => {
-  const scroller = el.closest('[data-testid="entry-list"]')?.parentElement ?? el.offsetParent
-  return scroller instanceof HTMLElement ? scroller : null
+/**
+ * The reading pane's scroll container.
+ *
+ * Resolved at use time, never in a ref: a ref callback runs before the element is
+ * in the document, so ancestry is not available there. One definition, because
+ * three (a query, a `closest()` climb and an `offsetParent` fallback) can each go
+ * stale alone.
+ */
+export const scrollRoot = (): HTMLElement | null => {
+  const el = document.querySelector<HTMLElement>('[data-testid="entry-scroll"]')
+  return el ?? null
 }
+
+const scrollerFor = (el: HTMLElement): HTMLElement | null => scrollRoot() ?? el.parentElement
 
 export const scrollToEntry = (entryId: EntryId): void => {
   const el = document.getElementById(`entry-${entryId}`)

@@ -13,6 +13,7 @@
  */
 import { BAND_FRACTION, isScrolledPast } from '../shared/reading'
 import type { EntryId } from '../shared/ids'
+import { scrollRoot } from './nav'
 import type { Reader } from './reader'
 
 type Member = { el: HTMLElement; entryId: EntryId }
@@ -20,9 +21,8 @@ type Member = { el: HTMLElement; entryId: EntryId }
 const members = new Set<Member>()
 let rafId: number | null = null
 
-/** The reading pane's scroll container, resolved at use time (it may not exist yet). */
-const scrollContainer = (): HTMLElement | null =>
-  document.querySelector<HTMLElement>('[data-testid="entry-scroll"]')
+/** The reading pane's scroll container, from the one definition in ./nav. */
+const scrollContainer = (): HTMLElement | null => scrollRoot()
 
 /**
  * One pass over the cards: anything whose top edge has risen above the reading

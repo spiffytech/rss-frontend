@@ -19,8 +19,6 @@ export type EntrySummary = {
   publishedAt: EpochMs
   status: EntryStatus
   starred: boolean
-  readingTime: number
-  tags: string[]
   /**
    * The raw HTML body. It travels with the row rather than in a request of its
    * own: a page of a hundred averages 41 KB of bodies, less than the client
@@ -28,8 +26,6 @@ export type EntrySummary = {
    * The display pipeline still runs client-side (untrusted feed HTML).
    */
   content: string
-  commentsUrl: string | null
-  language: string | null
   /** Feed base URL for resolving relative links inside the body. */
   feedBaseUrl: string | null
 }
@@ -37,8 +33,6 @@ export type EntrySummary = {
 export type CategoryCount = {
   id: CategoryId
   title: string
-  totalUnread: number
-  feedCount: number
 }
 
 export type FeedInfo = {
@@ -49,7 +43,8 @@ export type FeedInfo = {
   feedUrl: string
   disabled: boolean
   parsingErrorCount: number
-  iconUrl: string | null
+  /** Whether an icon exists. The URL is `/api/icons/<id>` — the client builds it. */
+  hasIcon: boolean
 }
 
 export type FeedPanelResult = {

@@ -27,7 +27,6 @@ export interface LearnAggregates {
   /** feedId -> (minute-of-day -> entry count) */
   minuteCounts: Map<FeedId, Map<number, number>>
   /** feedId -> median gap between consecutive published_at, in minutes */
-  medGapMinutes: Map<FeedId, number>
 }
 
 /**
@@ -66,27 +65,10 @@ export function fetchLearnAggregates(
 
   const dayCounts = new Map<FeedId, Map<number, number>>()
   const minuteCounts = new Map<FeedId, Map<number, number>>()
-  const medGapMinutes = new Map<FeedId, number>()
   let cur: FeedId | null = null
-  let prev: number | null = null
-  let gaps: number[] = []
-  const flush = () => {
-    if (cur === null) return
-    if (gaps.length > 0) {
-      gaps.sort((a, b) => a - b)
-      const mid = gaps.length >> 1
-      const med = gaps.length % 2 === 1 ? (gaps[mid] as number) : ((gaps[mid - 1] as number) + (gaps[mid] as number)) / 2
-      medGapMinutes.set(cur, med)
-    }
-  }
   for (const row of rows) {
     const feedId = row.feed_id as FeedId
-    if (feedId !== cur) {
-      flush()
-      cur = feedId
-      prev = null
-      gaps = []
-    }
+    if (feedId !== cur) cur = feedId
     const t = row.published_at
     let days = dayCounts.get(feedId)
     if (!days) dayCounts.set(feedId, (days = new Map()))
@@ -96,11 +78,8 @@ export function fetchLearnAggregates(
     if (!mins) minuteCounts.set(feedId, (mins = new Map()))
     const m = minuteOfDay(t)
     mins.set(m, (mins.get(m) ?? 0) + 1)
-    if (prev !== null) gaps.push((t - prev) / 60_000)
-    prev = t
   }
-  flush()
-  return { dayCounts, minuteCounts, medGapMinutes }
+  return { dayCounts, minuteCounts }
 }
 
 export interface TargetWrite {

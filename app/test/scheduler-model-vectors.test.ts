@@ -40,8 +40,8 @@ const OPTS: ScheduleOptions = {
 /** `days` consecutive epoch days starting at 19000. */
 const day = (i: number) => 19000 + i
 
-function feed(stamps: number[], dayCounts: Map<number, number>, medGapMinutes: number | null): FeedInput {
-  return { feedId: 'feed-1' as FeedId, stamps, dayCounts, medGapMinutes }
+function feed(stamps: number[], dayCounts: Map<number, number>): FeedInput {
+  return { feedId: 'feed-1' as FeedId, stamps, dayCounts }
 }
 
 describe('buildFeedModel', () => {
@@ -52,7 +52,7 @@ describe('buildFeedModel', () => {
       stamps.push(21 * 60) // 21:00 UTC every day
       dayCounts.set(day(i), 1)
     }
-    const m = buildFeedModel(feed(stamps, dayCounts, 24 * 60), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     // 90 entries over 7 weekdays => no weekday signal, so the budget collapses
     // to the item rate -- and the FLOOR of 2, because a day we expect a
@@ -72,7 +72,7 @@ describe('buildFeedModel', () => {
       stamps.push(i % 2 === 0 ? 9 * 60 : 21 * 60)
       dayCounts.set(day(i), 1)
     }
-    const m = buildFeedModel(feed(stamps, dayCounts, 24 * 60), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     expect(m!.concentrated).toBe(true)
     expect(m!.numModes).toBeGreaterThanOrEqual(2)
@@ -82,7 +82,7 @@ describe('buildFeedModel', () => {
     // The exact shape that made Miniflux poll Framework Blog every 5 minutes.
     // The budget floor is 2, never the entry count.
     const dayCounts = new Map<number, number>([[day(0), 2]])
-    const m = buildFeedModel(feed([20 * 60, 20 * 60 + 5], dayCounts, 5), OPTS)
+    const m = buildFeedModel(feed([20 * 60, 20 * 60 + 5], dayCounts), OPTS)
     expect(m).not.toBeNull()
     for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBe(2)
   })
@@ -91,7 +91,7 @@ describe('buildFeedModel', () => {
     // 20 entries in a five-minute burst on one day of a 90-day window.
     const stamps = Array.from({ length: 20 }, (_, i) => 20 * 60 + i)
     const dayCounts = new Map<number, number>([[day(0), 20]])
-    const m = buildFeedModel(feed(stamps, dayCounts, 1), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBeLessThanOrEqual(2)
   })
@@ -100,7 +100,7 @@ describe('buildFeedModel', () => {
     const stamps = Array.from({ length: 30 }, () => 0) // every entry stamped midnight
     const dayCounts = new Map<number, number>()
     for (let i = 0; i < 30; i++) dayCounts.set(day(i), 1)
-    const m = buildFeedModel(feed(stamps, dayCounts, 24 * 60), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     expect(m!.dateOnly).toBe(true)
     for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBeGreaterThanOrEqual(3)
@@ -116,7 +116,7 @@ describe('buildFeedModel', () => {
       stamps.push(10 * 60)
       dayCounts.set(day(i * 7), 1)
     }
-    const m = buildFeedModel(feed(stamps, dayCounts, 7 * 24 * 60), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     expect(m!.dowSignal).toBe(true)
     const publishDow = new Date(19000 * 86400_000).getUTCDay()
@@ -148,14 +148,14 @@ describe('buildFeedModel', () => {
       n += items
     }
     expect(n).toBeGreaterThan(4000)
-    const m = buildFeedModel(feed(stamps, dayCounts, 20), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     expect(m!.dowSignal).toBe(false)
     for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBeGreaterThanOrEqual(50)
   })
 
   test('no entries yields no model', () => {
-    expect(buildFeedModel(feed([], new Map(), null), OPTS)).toBeNull()
+    expect(buildFeedModel(feed([], new Map()), OPTS)).toBeNull()
   })
 })
 
@@ -166,7 +166,7 @@ describe('rate EMA', () => {
     for (let i = 0; i < 80; i++) dayCounts.set(day(i), 4)
     for (let i = 80; i < 90; i++) dayCounts.set(day(i), 30)
     const stamps = new Array<number>(620).fill(12 * 60)
-    const m = buildFeedModel(feed(stamps, dayCounts, 60), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     // Flat average would be (80*4 + 10*30)/90 = 6.2/day. The EMA is dominated by
     // the recent 30/day and lands near 20 — the budget has to follow the pace
@@ -178,7 +178,7 @@ describe('rate EMA', () => {
     // Two entries five minutes apart on ONE day. Miniflux's
     // (max-min)/(count-1) denominator collapses and yields 288 items/day.
     const dayCounts = new Map<number, number>([[day(89), 2]])
-    const m = buildFeedModel(feed([600, 605], dayCounts, 5), OPTS)
+    const m = buildFeedModel(feed([600, 605], dayCounts), OPTS)
     expect(m).not.toBeNull()
     expect(Math.max(...m!.budget)).toBeLessThanOrEqual(3)
   })
@@ -190,7 +190,7 @@ describe('rate EMA', () => {
     for (let i = 0; i < 90; i++) dayCounts.set(day(i), 20)
     const stamps = new Array<number>(1800).fill(12 * 60)
     for (const hl of [1, 3, 7, 30, 200]) {
-      const m = buildFeedModel(feed(stamps, dayCounts, 60), { ...OPTS, rateHalfLifeDays: hl })
+      const m = buildFeedModel(feed(stamps, dayCounts), { ...OPTS, rateHalfLifeDays: hl })
       expect(m).not.toBeNull()
       expect(m!.budget[0]).toBe(20)
     }
@@ -201,7 +201,7 @@ describe('rate EMA', () => {
     for (let i = 0; i < 30; i++) dayCounts.set(day(i), 40) // busy month…
     // …then nothing for the last 60 days
     const stamps = new Array<number>(1200).fill(12 * 60)
-    const m = buildFeedModel(feed(stamps, dayCounts, 60), OPTS)
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)
     expect(m).not.toBeNull()
     // The floor is 2 while the feed is still active on any day at all: a
     // stalled feed errs toward noticing recovery.
@@ -229,7 +229,7 @@ describe('regressions', () => {
     const dayCounts = new Map<number, number>()
     for (let i = 0; i < 30; i++) dayCounts.set(day(i), 1)
     const opts: ScheduleOptions = { ...OPTS, maxPollsPerDay: 2 }
-    const m = buildFeedModel(feed(stamps, dayCounts, 1440), opts)
+    const m = buildFeedModel(feed(stamps, dayCounts), opts)
     expect(m).not.toBeNull()
     expect(m!.dateOnly).toBe(true)
     for (let d = 0; d < 7; d++) expect(m!.budget[d]).toBeLessThanOrEqual(2)
@@ -283,7 +283,7 @@ describe('errors never throttle a learned schedule', () => {
       for (let k = 0; k < 40; k++) stamps.push(Math.floor((k * MINUTES_PER_DAY) / 40))
       dayCounts.set(day(i), 40)
     }
-    const m = buildFeedModel(feed(stamps, dayCounts, 20), OPTS)!
+    const m = buildFeedModel(feed(stamps, dayCounts), OPTS)!
     const dayStart = 19089 * 86_400_000
     const learned = m.pollMinutes(new Date(dayStart).getUTCDay())
     expect(learned.length).toBe(40)

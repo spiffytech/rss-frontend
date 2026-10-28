@@ -130,7 +130,9 @@ test('counters share the list predicate exactly', () => {
   const listUnread = view(handle.db, { userId, filter: { feedId: feedA } }).length
   expect(p.counters[feedA]).toBe(listUnread) // counters share the list predicate exactly
   expect(p.counters[feedA!]).toBe(1)
-  expect(p.categories[0]!.totalUnread).toBe(2)
+  // Category totals are the sum of these counters on the client; the payload
+  // carries no separate total to drift from them.
+  expect(p.categories).toHaveLength(1)
 })
 
 test('markEntries touches exactly the passed ids and never removed rows', () => {

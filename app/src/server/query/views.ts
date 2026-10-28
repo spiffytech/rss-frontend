@@ -34,11 +34,7 @@ const entryColumns = {
   publishedAt: entries.publishedAt,
   status: entries.status,
   starred: entries.starred,
-  readingTime: entries.readingTime,
-  tags: entries.tags,
   content: sql<string>`COALESCE(${entries.content}, '')`,
-  commentsUrl: entries.commentsUrl,
-  language: entries.language,
   feedBaseUrl: sql<string | null>`COALESCE(${feeds.siteUrl}, ${feeds.feedUrl})` as SQL<string | null>,
 } as const
 
@@ -195,20 +191,12 @@ export function panel(
   const counters: Record<string, number> = {}
   for (const row of counterRows) counters[row.feedId] = row.count
 
+  // Totals per category used to be computed here and never rendered: the sidebar
+  // sums the per-feed counters instead, so there is one definition of the number.
   const categoryRows = db.select().from(categories).where(eq(categories.userId, opts.userId)).orderBy(asc(categories.title)).all()
-  const feedsByCategory = new Map<string, { count: number; unread: number }>()
-  for (const feed of feedRows) {
-    const entry = feedsByCategory.get(feed.categoryId) ?? { count: 0, unread: 0 }
-    entry.count++
-    entry.unread += counters[feed.id] ?? 0
-    feedsByCategory.set(feed.categoryId, entry)
-  }
-
   const categoryCounts: CategoryCount[] = categoryRows.map((c) => ({
     id: c.id as CategoryId,
     title: c.title,
-    totalUnread: feedsByCategory.get(c.id)?.unread ?? 0,
-    feedCount: feedsByCategory.get(c.id)?.count ?? 0,
   }))
 
   const toFeedInfo = (f: (typeof feedRows)[number]): FeedInfo => ({
@@ -219,7 +207,7 @@ export function panel(
     feedUrl: f.feedUrl,
     disabled: f.disabled,
     parsingErrorCount: f.parsingErrorCount,
-    iconUrl: f.iconId === null ? null : `/api/icons/${f.id}`,
+    hasIcon: f.iconId !== null,
   })
 
   // The view's own feed stays in the list even with nothing unread: the sidebar

@@ -97,12 +97,10 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
 function toInputs(agg: ReturnType<typeof fetchLearnAggregates>): Map<FeedId, FeedInput> {
   const out = new Map<FeedId, FeedInput>()
   for (const [feedId, dayCounts] of agg.dayCounts) {
-    const gap = agg.medGapMinutes.get(feedId)
     out.set(feedId, {
       feedId,
       stamps: expandMinuteCounts(agg.minuteCounts.get(feedId) ?? new Map()),
       dayCounts,
-      medGapMinutes: gap === undefined ? null : gap,
     })
   }
   return out

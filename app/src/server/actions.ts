@@ -125,48 +125,6 @@ export const viewPanel = authed(async ({ user }, currentFeed: FeedId | null) => 
   }
 })
 
-/** Next window of the current view (keyset pagination). */
-export const entries = authed(
-  async ({ user }, filter: EntriesFilter, cursor: unknown) => {
-    const identity = parse(zodEntriesFilter, filter ?? {})
-    const at = parse(cursorSchema, cursor ?? null)
-    return queryView(db(), { userId: user.id, filter: identity, cursor: at })
-  },
-)
-
-/** Sidebar snapshot. `currentFeed` keeps the open feed named when the sidebar
- *  hides feeds with no unread items. */
-export const panel = authed(async ({ user }, currentFeed: FeedId | null) => {
-  const handle = db()
-  return panelFromDb(handle, {
-    userId: user.id,
-    hideEmptyFeeds: getUserPrefs(handle, user.id).hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
-    currentFeed: currentFeed ?? null,
-  })
-})
-
-/**
- * What the home page needs: the sidebar, and which feeds are favorited. No
- * entries — the home is a set of links, not a reading surface.
- */
-export const navigation = authed(async ({ user }) => {
-  const handle = db()
-  const userPrefs = getUserPrefs(handle, user.id)
-  const feedPrefs = getAllFeedPrefs(handle, user.id)
-  return {
-    ...panelFromDb(handle, {
-      userId: user.id,
-      hideEmptyFeeds: userPrefs.hideEmptyFeeds ?? DEFAULT_HIDE_EMPTY_FEEDS,
-      currentFeed: null,
-      // A favorited feed with nothing unread is still a link on the home page.
-    }),
-    feedPrefs,
-    userPrefs,
-  }
-})
-
-/** One entry's body (raw HTML; the display pipeline runs client-side). */
-
 /**
  * Kick a refresh for the current view's feeds.
  *

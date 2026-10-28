@@ -29,17 +29,20 @@ import { filterIdentity, hasView, type EntriesFilter } from '../shared/filter'
 import type { CategoryId, EntryId, FeedId } from '../shared/ids'
 import {
   DEFAULT_HIDE_EMPTY_FEEDS,
+  DEFAULT_HIDE_READ_ITEMS,
+  DEFAULT_SORT,
   DEFAULT_VIEW_MODE,
   type FeedPrefs,
-  type UserPrefs,
 } from '../shared/prefs'
 import type { EntrySummary, FeedPanelResult, ViewCursor } from '../shared/types'
 import { compareTitlesCI, computeUnreadCount } from '../shared/util'
-import { navTarget, scrollToEntry } from './nav'
+import { navTarget, scrollRoot, scrollToEntry } from './nav'
 
 /** One screenful; scrolling asks for another. */
 const PAGE_SIZE = 100
 const POLL_MS = 60_000
+/** Must match the server's `entryIds` cap in `setStatus`. */
+const STATUS_BATCH_MAX = 500
 
 type ListState = {
   entries: EntrySummary[]
@@ -196,6 +199,26 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   // ---- derived ----
 
+  /**
+   * This feed's saved preferences, resolved against the defaults.
+   *
+   * The controls read these, not `filter()`: the filter is the URL, and the URL
+   * only names the view (`?feed=`), never the sort or hide-read prefs. Reading
+   * `filter().sort` made the sort button compute from "oldest" forever and the
+   * read-items button compute from "hidden" forever — one-way toggles whose label
+   * disagreed with the window they had produced.
+   */
+  const feedPrefs = (): FeedPrefs | undefined => {
+    const id = currentFeedId()
+    return id ? panel.feedPrefs[id] : undefined
+  }
+
+  /** The resolved sort order this view is using. */
+  const sortOrder = (): 'oldest' | 'newest' => feedPrefs()?.sort ?? DEFAULT_SORT
+
+  /** Whether read entries are hidden in this view. */
+  const hidesReadItems = (): boolean => feedPrefs()?.hideReadItems ?? DEFAULT_HIDE_READ_ITEMS
+
   const effectiveViewMode = (): 'expanded' | 'list' =>
     session.viewModeOverride ??
     (currentFeedId() ? panel.feedPrefs[currentFeedId()!]?.viewMode : undefined) ??
@@ -245,7 +268,7 @@ export const createReader = (filter: () => EntriesFilter) => {
   /** Where this feed's icon can be fetched, or `null` for "show the letter". */
   const iconUrl = (feedId: FeedId): string | null => {
     const feed = panel.allFeeds.find((candidate) => candidate.id === feedId)
-    return feed?.iconUrl != null ? `/api/icons/${feedId}` : null
+    return feed?.hasIcon ? `/api/icons/${feedId}` : null
   }
 
   // ---- writes ----
@@ -259,10 +282,11 @@ export const createReader = (filter: () => EntriesFilter) => {
    * optimistic layer, so all that is left is telling the reader what happened and
    * re-reading — which is also what clears a stale row from the list.
    */
-  const runWrite = async (what: string, work: () => Promise<unknown>): Promise<void> => {
+  const runWrite = async (what: string, work: () => Promise<unknown>): Promise<boolean> => {
     try {
       await work()
       setWriteError(null)
+      return true
     } catch (error) {
       setWriteError(describeWriteFailure(error, what))
       setSession((draft) => {
@@ -270,6 +294,7 @@ export const createReader = (filter: () => EntriesFilter) => {
       })
       refresh(page)
       refresh(panel)
+      return false
     }
   }
 
@@ -313,14 +338,27 @@ export const createReader = (filter: () => EntriesFilter) => {
     void runWrite(reads.length > 0 ? 'mark that read' : 'mark that unread', async () => {
       // The server answers with the rows it wrote: remember what it changed, then
       // let the list re-produce itself from that.
+      // The endpoint accepts 500 ids per call. Mark-all on a long scroll can hold
+      // more than that, and used to fail the whole batch with a 400.
+      const chunks = <T>(items: T[]): T[][] => {
+        const out: T[][] = []
+        for (let i = 0; i < items.length; i += STATUS_BATCH_MAX) {
+          out.push(items.slice(i, i + STATUS_BATCH_MAX))
+        }
+        return out
+      }
       const rows = await action(function* () {
-        return [
-          ...(reads.length > 0 ? snapshot(yield api.setStatus(reads, 'read')) : []),
-          ...(unreads.length > 0 ? snapshot(yield api.setStatus(unreads, 'unread')) : []),
-        ]
+        const written: Awaited<ReturnType<typeof api.setStatus>> = []
+        for (const chunk of chunks(reads)) written.push(...snapshot(yield api.setStatus(chunk, 'read')))
+        for (const chunk of chunks(unreads)) {
+          written.push(...snapshot(yield api.setStatus(chunk, 'unread')))
+        }
+        return written
       })()
       confirm(
-        rows.map((row) => ({ id: row.id, status: row.status, starred: row.starred })),
+        rows
+          .filter((row) => row.status === "read" || row.status === "unread")
+          .map((row) => ({ id: row.id, status: row.status as "read" | "unread", starred: row.starred })),
       )
       // One re-read per burst (the batch is already coalesced), so the sidebar
       // settles on the server's numbers as soon as the write comes back — which is
@@ -433,9 +471,9 @@ export const createReader = (filter: () => EntriesFilter) => {
    * never disagree about which card is current.
    */
   const anchorIndex = (): number => {
-    const container = document.querySelector('[data-testid="entry-scroll"]')
+    const container = scrollRoot()
     const list = entries()
-    if (!(container instanceof HTMLElement)) return 0
+    if (!container) return 0
     const bandTop = container.getBoundingClientRect().top + container.clientHeight * BAND_FRACTION
     for (let index = 0; index < list.length; index++) {
       const element = document.getElementById(`entry-${list[index]!.id}`)
@@ -540,7 +578,15 @@ export const createReader = (filter: () => EntriesFilter) => {
 
   // ---- writes that change the view ----
 
+  /**
+   * Ask the server to poll this view's feeds now, then re-read.
+   *
+   * The button is called "Refresh feeds": re-reading the database without telling
+   * the scheduler to fetch was a local reload wearing that label. The fetch itself
+   * happens on the scheduler's next tick (≤60s), so this only *requests* it.
+   */
   const refreshFeeds = async (): Promise<void> => {
+    await runWrite('refresh those feeds', () => api.refresh(wire(filter())))
     // New entries arrive at the top; the draft only appends, so ask it to start
     // over rather than expecting a refresh to reveal them.
     setSession((draft) => {
@@ -674,25 +720,32 @@ export const createReader = (filter: () => EntriesFilter) => {
     const kind = session.renameKind
     const title = session.renameTitle.trim()
     if (id == null || kind == null || !title) return
-    const rename = (draft: FeedPanelResult) => {
-      if (kind === 'feed') {
-        for (const feed of draft.allFeeds) if (feed.id === id) feed.title = title
-        for (const feed of draft.feeds) if (feed.id === id) feed.title = title
-      } else {
-        for (const category of draft.categories) if (category.id === id) category.title = title
-      }
-    }
-    // Out of the transition, so the draft stays put if the write is rejected.
-    rename(panel)
-    await runWrite('rename that', () =>
+
+    const saved = await runWrite('rename that', () =>
       action(function* () {
+        // Applied inside the transition and re-produced by `refresh(panel)`.
+        // Writing the projection outside one (as this used to) has no transaction
+        // to live in, so it was discarded and the sidebar only changed once the
+        // server answered.
+        setPanel((draft) => {
+          if (kind === 'feed') {
+            for (const feed of draft.allFeeds) if (feed.id === id) feed.title = title
+            for (const feed of draft.feeds) if (feed.id === id) feed.title = title
+          } else {
+            for (const category of draft.categories) if (category.id === id) category.title = title
+          }
+        })
         yield kind === 'feed'
           ? api.renameFeed(id as FeedId, title)
           : api.renameCategory(id as CategoryId, title)
-        cancelRename()
         refresh(panel)
       })(),
     )
+
+    // The editor is session state, not a projection: close it only once the write
+    // committed. Cancelling inside the action meant a resolved write could leave
+    // the editor open, and a rejected one could close it.
+    if (saved) cancelRename()
   }
 
   const unsubscribe = async (feedId: FeedId): Promise<void> => {
@@ -744,6 +797,8 @@ export const createReader = (filter: () => EntriesFilter) => {
     currentTitle,
     unreadCount,
     effectiveViewMode,
+    sortOrder,
+    hidesReadItems,
     favoriteFeeds,
     favoriteFeedsWithUnread,
     isFavorite,

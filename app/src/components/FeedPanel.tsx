@@ -82,7 +82,7 @@ export const FeedPanel = () => {
         ref={autofocus}
         class="w-full p-0.5 border border-gray-300 rounded text-sm"
         value={r.session.renameTitle}
-        onInput={(event) => r.setSession((state) => { r.session.renameTitle = event.currentTarget.value })}
+        onInput={(event) => r.setRenameTitle(event.currentTarget.value)}
         onKeyDown={onRenameKeydown}
       />
       <div class="flex items-center justify-end gap-1">

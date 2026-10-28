@@ -57,8 +57,6 @@ export interface FeedInput {
   stamps: number[]
   /** Entry count per UTC day (epoch-day number -> count). */
   dayCounts: Map<number, number>
-  /** Median gap between consecutive published_at values, in minutes; null when < 2 entries. */
-  medGapMinutes: number | null
 }
 
 export interface ScheduleOptions {
@@ -87,7 +85,6 @@ export interface FeedModel {
   peak: number
   /** Poll budget per weekday (0 = Sunday). */
   budget: number[]
-  medGapMinutes: number | null
   dowSignal: boolean
   publishDays: Set<number>
   /** Cached poll placement (minutes-of-day, ascending) for a weekday's budget. */
@@ -374,8 +371,6 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
     return uniq
   }
 
-  const medGapMinutes = input.medGapMinutes
-
   return {
     feedId: input.feedId,
     dateOnly,
@@ -383,7 +378,6 @@ export function buildFeedModel(input: FeedInput, opts: ScheduleOptions): FeedMod
     numModes,
     peak,
     budget,
-    medGapMinutes,
     dowSignal,
     publishDays,
     outsideFrac,
