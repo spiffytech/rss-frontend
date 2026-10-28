@@ -82,16 +82,13 @@ export const ReaderPage = () => {
     },
   );
 
-  // A fresh list starts at the top (nav, feed re-click, mark-all-read, refresh —
-  // anything that bumps pageGen).
-  let lastGen = 0;
+  // A new view starts at the top. Keyed on the view's identity rather than a
+  // counter: the URL changing is the event, and a second counter could only ever
+  // say the same thing.
   createEffect(
-    () => r.session.pageGen,
-    (gen) => {
-      if (gen !== lastGen) {
-        lastGen = gen;
-        if (scrollEl) scrollEl.scrollTop = 0;
-      }
+    () => r.viewKey(),
+    () => {
+      if (scrollEl) scrollEl.scrollTop = 0;
     },
   );
 

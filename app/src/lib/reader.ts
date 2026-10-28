@@ -86,8 +86,6 @@ export type ReaderSession = {
   wanted: number
   /** Bumped to ask the list to start over from the newest row. */
   listGen: number
-  /** Bumped when the list is replaced, so the page can scroll to the top. */
-  pageGen: number
 }
 
 /** A rejection's status, whether it arrives as a Response or a wrapped error. */
@@ -122,7 +120,6 @@ export const createReader = (filter: () => EntriesFilter) => {
     renameTitle: '',
     wanted: PAGE_SIZE,
     listGen: 0,
-    pageGen: 0,
   })
 
   const currentFeedId = (): FeedId | null => (filter().feedId as FeedId | undefined) ?? null
@@ -572,7 +569,6 @@ export const createReader = (filter: () => EntriesFilter) => {
       draft.confirmed = {}
       draft.navStarted = false
       draft.listGen = 0
-      draft.pageGen++
     })
   })
 
@@ -785,6 +781,8 @@ export const createReader = (filter: () => EntriesFilter) => {
   }
 
   return {
+    /** Identity of the current view; the page scrolls to the top when it changes. */
+    viewKey,
     entries,
     counterFor,
     filter,
