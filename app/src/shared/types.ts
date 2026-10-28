@@ -1,8 +1,5 @@
 /**
- * API shapes shared by the SvelteKit server and the client. Ported from the
- * old app's src/shared/types.ts: Miniflux's pagination fields die (one full
- * display set per view), and entry bodies leave the list payload (content
- * loads per card).
+ * API shapes shared by the server and the client.
  */
 import type { EntriesFilter } from './filter'
 import type { CategoryId, EntryId, EntryStatus, EpochMs, FeedId } from './ids'

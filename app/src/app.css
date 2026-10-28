@@ -6,7 +6,7 @@
 @import 'lite-youtube-embed/src/lite-yt-embed.css';
 
 /* Design tokens: font stacks (Inter UI / Lora reading) + semantic color
- * aliases. Google Fonts are <link>ed in app.html; these stacks fall back
+ * aliases. Google Fonts are <link>ed in `src/Document.tsx`; these stacks fall back
  * gracefully to system faces if the network fonts are slow/unavailable. */
 @theme {
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,

@@ -169,7 +169,7 @@ shape to keep:
 | Auth, authz gate, `renderMode` | `src/middleware.ts` + `authed()` in `src/server/auth.ts` |
 | Reads and mutations | `'use server'` functions in `src/server/actions.ts` |
 | Plain URL endpoints (WebSub, `/health`, feed icons) | `src/api-routes.ts`, mounted from middleware |
-| Client state | `src/lib/state.ts` (`createStore` + draft setters) |
+| Client state | `src/lib/reader.ts` (projections + session) |
 | Production entry / dev worker | `server.ts` / `src/startup-cli.ts` |
 
 Rules that survived the port:

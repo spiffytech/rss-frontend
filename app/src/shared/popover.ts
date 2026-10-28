@@ -1,10 +1,10 @@
 // Placement math for the toolbar's feed popover.
 //
-// The panel is a top-layer `popover`, so its containing block is the viewport
+// The panel is a top-layer `<dialog>`, so its containing block is the viewport
 // and it does not follow its trigger the way an absolutely-positioned menu
 // would: top/left/width have to be computed and re-applied. Kept pure (and in
 // src/shared, alongside the other framework-free helpers) because jsdom has no
-// popover implementation — this is the only part of placement a test can reach.
+// dialog implementation — this is the only part of placement a test can reach.
 
 /** Gap between the trigger and the panel. */
 export const POPOVER_GAP = 4

@@ -1,7 +1,5 @@
-// Pure reading-pane decision logic — DOM-free so it's unit-testable under
-// `bun test`. Logic verbatim from the old app's src/shared/reading.ts; only
-// the id types changed (UUIDv7 brands instead of Miniflux integers).
-// The actions in src/client/actions.ts wire these to real observers.
+// Pure reading-pane decision logic — DOM-free so it is unit-testable under
+// `bun test`. `src/lib/reader.ts` wires it to real scrolling.
 
 import type { EntryId, FeedId } from './ids'
 

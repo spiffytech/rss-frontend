@@ -1,8 +1,6 @@
 /**
- * Shared UI helpers — ported from the old app's src/shared/util.ts (minus
- * lazyHtml, which dies with the old display path: the display pipeline in
- * src/client/display/ owns content rendering now). Ids are UUIDv7 strings
- * here instead of Miniflux integers; the logic is verbatim.
+ * Shared UI helpers. Ids are UUIDv7 strings rather than Miniflux integers; the
+ * display pipeline in `src/lib/display/` owns content rendering.
  */
 
 /**

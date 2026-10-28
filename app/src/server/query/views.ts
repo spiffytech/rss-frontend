@@ -1,6 +1,6 @@
 /**
- * View queries: one full display set per view (IDs + metadata — entry bodies
- * load per card), newest- or oldest-first per the resolved prefs. The hidden
+ * View queries: one full display set per view, bodies included (one request and
+ * one query per page), newest- or oldest-first per the resolved prefs. The hidden
  * filter predicate and the counters share one definition of "visible", and
  * soft-deleted rows never appear anywhere.
  */
